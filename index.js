@@ -65,15 +65,15 @@ client.on('messageCreate', async message => {
   const setup = ticketSetup.get(guildId);
 
   if (content === '!help') {
-    return message.channel.send(`📘 **Bot Command Overview**
+  const helpText = `📘 **Bot Command Overview**
 
 🎟️ **Ticket System**
 📝 \`!ticket <message>\` — Set ticket message  
 ➕ \`!option <emoji> <label>\` — Add a category  
 🎭 \`!ticketviewer @role\` — Set viewer role  
-📂 \`!ticketcategory #channel\` — Set ticket category (uses #channel's parent)  
+📂 \`!ticketcategory #channel\` — Set ticket category  
 🚀 \`!deployticketpanel\` — Deploy dropdown panel  
-🗑️ **Delete Ticket** button — Close ticket & receive transcript
+🗑️ Delete button — Close ticket & receive transcript
 
 🎮 **Mini-Games**
 🎯 \`!guess <number>\` — Guess a number  
@@ -85,8 +85,10 @@ client.on('messageCreate', async message => {
 💬 \`!msg <message>\` — Bot says message  
 📨 \`!dm @role <message>\` — DM a role
 
-ℹ️ \`!help\` — Show this guide`);
-  }
+ℹ️ \`!help\` — Show this guide`;
+
+  return message.channel.send(helpText);
+}
 
   if (content.startsWith('!ticket ')) {
     setup.description = content.slice(8).trim();
