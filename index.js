@@ -62,7 +62,7 @@ client.on('messageCreate', async message => {
   const setup = ticketSetup.get(guildId);
 
 if (content === '!help') {
-  return message.channel.send(`
+  await message.channel.send(`
 📘 **Bot Command Overview**
 
 ━━━━━━━━━━━━━━━━━━━━
@@ -94,6 +94,7 @@ if (content === '!help') {
 ━━━━━━━━━━━━━━━━━━━━
 📖 \`!help\` — Display this command guide.
   `);
+  return; // ✅ This ensures no other response is sent after
 }
 
   if (content.startsWith('!ticket ')) {
