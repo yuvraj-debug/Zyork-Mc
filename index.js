@@ -8,10 +8,7 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  PermissionsBitField,
-  REST,
-  Routes,
-  SlashCommandBuilder
+  PermissionsBitField
 } = require('discord.js');
 
 const app = express();
@@ -44,85 +41,13 @@ const triviaQuestions = [
 const scrambleWords = ['banana', 'elephant', 'discord', 'javascript', 'pirate'];
 const scramble = word => word.split('').sort(() => 0.5 - Math.random()).join('');
 
-client.once('ready', async () => {
+client.once('ready', () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
-
-  const commands = [
-    new SlashCommandBuilder().setName('help').setDescription('Show help menu'),
-    new SlashCommandBuilder().setName('ping').setDescription('Ping the bot')
-  ].map(cmd => cmd.toJSON());
-
-  const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
-  try {
-    await rest.put(Routes.applicationCommands('1383659368276430949'), { body: commands });
-    console.log('✅ Slash commands registered');
-  } catch (err) {
-    console.error('❌ Slash command registration error:', err);
-  }
-});
-
-client.on('interactionCreate', async interaction => {
-  if (interaction.isChatInputCommand()) {
-    if (interaction.commandName === 'ping') {
-      return interaction.reply('🏓 Pong!');
-    }
-
-    if (interaction.commandName === 'help') {
-      return interaction.reply({ content: getHelpMessage(), ephemeral: true });
-    }
-  }
-
-  if (!interaction.isButton() || !interaction.guild) return;
-
-  const setup = ticketSetup.get(interaction.guild.id);
-  if (!setup || !setup.options.length || !setup.categoryId || !setup.viewerRoleId) {
-    return interaction.reply({ content: '❌ Ticket system is not fully configured.', ephemeral: true });
-  }
-
-  const optionIndex = parseInt(interaction.customId.split('_')[1]);
-  const option = setup.options[optionIndex];
-  const user = interaction.user;
-  const ticketName = `ticket-${user.username.toLowerCase().replace(/\s+/g, '-')}-${Date.now().toString().slice(-4)}`;
-
-  const existing = interaction.guild.channels.cache.find(c =>
-    c.name.startsWith(`ticket-${user.username.toLowerCase()}`)
-  );
-
-  if (existing) {
-    return interaction.reply({ content: `⚠️ You already have an open ticket: <#${existing.id}>`, ephemeral: true });
-  }
-
-  const ticketChannel = await interaction.guild.channels.create({
-    name: ticketName,
-    type: 0,
-    parent: setup.categoryId,
-    permissionOverwrites: [
-      {
-        id: interaction.guild.roles.everyone,
-        deny: [PermissionsBitField.Flags.ViewChannel]
-      },
-      {
-        id: user.id,
-        allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory]
-      },
-      {
-        id: setup.viewerRoleId,
-        allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory]
-      }
-    ]
-  });
-
-  await ticketChannel.send({
-    content: `🎫 <@${user.id}> created a ticket for **${option.label}**. <@&${setup.viewerRoleId}>`,
-    allowedMentions: { users: [user.id], roles: [setup.viewerRoleId] }
-  });
-
-  await interaction.reply({ content: `✅ Ticket created: <#${ticketChannel.id}>`, ephemeral: true });
 });
 
 client.on('messageCreate', async message => {
   if (message.author.bot || !message.guild) return;
-  const content = message.content.trim().toLowerCase();
+  const content = message.content.trim();
   const guildId = message.guild.id;
 
   if (!ticketSetup.has(guildId)) {
@@ -138,11 +63,27 @@ client.on('messageCreate', async message => {
   const setup = ticketSetup.get(guildId);
 
   if (content === '!help') {
-    return message.channel.send(getHelpMessage());
-  }
+    return message.channel.send(`📘 **Bot Command Overview**
 
-  if (content === '!ping') {
-    return message.reply('🏓 Pong!');
+🎟️ **Ticket System**
+📝 \`!ticket <message>\` — Set ticket message  
+➕ \`!option <emoji> <label>\` — Add a button  
+🎭 \`!ticketviewer @role\` — Set viewer role  
+📂 \`!ticketcategory #channel\` — Set category  
+🚀 \`!deployticketpanel\` — Deploy ticket panel  
+🗑️ \`!close\` — Close ticket
+
+🎮 **Mini-Games**
+🎯 \`!guess <number>\` — Guess a number  
+🧠 \`!trivia\` — Trivia question  
+🔤 \`!scramble\` — Unscramble word  
+🤖 \`!rps <rock|paper|scissors>\` — RPS game
+
+📬 **Messaging Tools**
+💬 \`!msg <message>\` — Bot says message  
+📨 \`!dm @role <message>\` — DM a role
+
+ℹ️ \`!help\` — Show this guide`);
   }
 
   if (content.startsWith('!ticket ')) {
@@ -153,7 +94,7 @@ client.on('messageCreate', async message => {
     } else {
       setup.footerImage = null;
     }
-    return message.reply('✅ Ticket panel message set. Use `!deployticketpanel` when ready.');
+    return message.reply('✅ Ticket message set.');
   }
 
   if (content.startsWith('!option ')) {
@@ -175,21 +116,20 @@ client.on('messageCreate', async message => {
 
   if (content.startsWith('!ticketcategory')) {
     const match = content.match(/<#(\d+)>/);
-    if (!match) return message.reply('❌ Mention a valid text channel.');
+    if (!match) return message.reply('❌ Mention a valid channel.');
     const channel = message.guild.channels.cache.get(match[1]);
     if (!channel?.parentId) return message.reply('❌ Channel has no category.');
     setup.categoryId = channel.parentId;
-    return message.reply(`✅ Ticket category set from parent of #${channel.name}`);
+    return message.reply(`✅ Ticket category set.`);
   }
 
   if (content === '!deployticketpanel') {
     if (!setup.description || !setup.options.length || !setup.viewerRoleId || !setup.categoryId) {
-      return message.reply('❌ Incomplete setup. Please configure everything first.');
+      return message.reply('❌ Setup incomplete.');
     }
 
     const fetched = await message.channel.messages.fetch({ limit: 100 });
-    const toDelete = fetched.filter(msg => msg.id !== message.id);
-    await message.channel.bulkDelete(toDelete, true).catch(() => {});
+    await message.channel.bulkDelete(fetched, true).catch(() => {});
 
     const embed = new EmbedBuilder()
       .setTitle('📩 Open a Ticket')
@@ -212,14 +152,14 @@ client.on('messageCreate', async message => {
     });
 
     await message.channel.send({ embeds: [embed], components: [row] });
-    return message.reply('✅ Ticket panel deployed. Previous messages cleared.');
+    return message.reply('✅ Ticket panel deployed.');
   }
 
   if (content === '!close') {
     if (!message.channel.name.startsWith('ticket-')) {
       return message.reply('❌ This is not a ticket channel.');
     }
-    await message.reply('🗑️ Closing this ticket...');
+    await message.reply('🗑️ Closing...');
     setTimeout(() => message.channel.delete(), 3000);
   }
 
@@ -236,9 +176,8 @@ client.on('messageCreate', async message => {
     const roleMention = args.shift();
     const msg = args.join(' ');
     const roleId = roleMention.match(/^<@&(\d+)>$/)?.[1];
-    if (!roleId) return message.reply('❌ Mention a valid role.');
     const role = message.guild.roles.cache.get(roleId);
-    if (!role) return message.reply('message.reply('❌ Role not found.');
+    if (!role) return message.reply('❌ Role not found.');
     let sent = 0;
     for (const [, member] of role.members) {
       member.send(msg).then(() => sent++).catch(() => {});
@@ -294,46 +233,75 @@ client.on('messageCreate', async message => {
     games.scrambledWord = '';
   }
 });
+client.on('interactionCreate', async interaction => {
+  // This handles only button interactions for the ticket system
+  if (!interaction.isButton() || !interaction.guild) return;
 
-// 📘 Shared help message used by both slash and text commands
-function getHelpMessage() {
-  return `
-📘 **Bot Command Overview**
+  const setup = ticketSetup.get(interaction.guild.id);
+  if (!setup || !setup.options.length || !setup.categoryId || !setup.viewerRoleId) {
+    return interaction.reply({
+      content: '❌ Ticket system is not fully configured on this server.',
+      ephemeral: true
+    });
+  }
 
-━━━━━━━━━━━━━━━━━━━━
-🎟️ **Ticket System**
-━━━━━━━━━━━━━━━━━━━━
-📝 \`ticket <message>\` — Set ticket panel message  
-➕ \`option <emoji> <label>\` — Add a ticket button  
-🎭 \`ticketviewer @role\` — Set support role  
-📂 \`ticketcategory #channel\` — Use channel category  
-🚀 \`deployticketpanel\` — Deploy the ticket panel  
-🗑️ \`close\` — Close ticket channel
+  const optionIndex = parseInt(interaction.customId.split('_')[1]);
+  const option = setup.options[optionIndex];
+  const user = interaction.user;
+  const ticketName = `ticket-${user.username.toLowerCase().replace(/\s+/g, '-')}-${Date.now().toString().slice(-4)}`;
 
-━━━━━━━━━━━━━━━━━━━━
-🎮 **Mini-Games**
-━━━━━━━━━━━━━━━━━━━━
-🎯 \`guess <number>\` — Number guessing  
-🧠 \`trivia\` — Answer trivia  
-🔤 \`scramble\` — Unscramble a word  
-🤖 \`rps <rock|paper|scissors>\` — Rock Paper Scissors
+  const existing = interaction.guild.channels.cache.find(c =>
+    c.name.startsWith(`ticket-${user.username.toLowerCase()}`)
+  );
 
-━━━━━━━━━━━━━━━━━━━━
-📬 **Messaging Tools**
-━━━━━━━━━━━━━━━━━━━━
-💬 \`msg <message>\` — Bot echo  
-📨 \`dm @role <message>\` — DM a role
+  if (existing) {
+    return interaction.reply({
+      content: `⚠️ You already have an open ticket: <#${existing.id}>`,
+      ephemeral: true
+    });
+  }
 
-━━━━━━━━━━━━━━━━━━━━
-ℹ️ **Utilities**
-━━━━━━━━━━━━━━━━━━━━
-📖 \`help\`, \`ping\` — Show help or check bot status
-  `;
-}
+  const ticketChannel = await interaction.guild.channels.create({
+    name: ticketName,
+    type: 0, // GuildText
+    parent: setup.categoryId,
+    permissionOverwrites: [
+      {
+        id: interaction.guild.roles.everyone,
+        deny: [PermissionsBitField.Flags.ViewChannel]
+      },
+      {
+        id: user.id,
+        allow: [
+          PermissionsBitField.Flags.ViewChannel,
+          PermissionsBitField.Flags.SendMessages,
+          PermissionsBitField.Flags.ReadMessageHistory
+        ]
+      },
+      {
+        id: setup.viewerRoleId,
+        allow: [
+          PermissionsBitField.Flags.ViewChannel,
+          PermissionsBitField.Flags.SendMessages,
+          PermissionsBitField.Flags.ReadMessageHistory
+        ]
+      }
+    ]
+  });
+
+  await ticketChannel.send({
+    content: `🎫 <@${user.id}> created a ticket for **${option.label}**. <@&${setup.viewerRoleId}>`,
+    allowedMentions: { users: [user.id], roles: [setup.viewerRoleId] }
+  });
+
+  await interaction.reply({
+    content: `✅ Ticket created: <#${ticketChannel.id}>`,
+    ephemeral: true
+  });
+});
 
 process.on('unhandledRejection', err => {
-  console.error('❌ Unhandled Rejection:', err);
+  console.error('Unhandled Rejection:', err);
 });
 
 client.login(process.env.DISCORD_TOKEN);
-
