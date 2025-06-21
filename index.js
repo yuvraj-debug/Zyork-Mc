@@ -13,10 +13,12 @@ const {
   AttachmentBuilder
 } = require('discord.js');
 
+// -- Keep-alive server --
 const app = express();
 app.get('/', (_, res) => res.send('Bot is alive!'));
 app.listen(3000, () => console.log('✅ Keep-alive server running'));
 
+// -- Discord client setup --
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -27,12 +29,13 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
+// -- Ticket system setup --
 const ticketSetup = new Map();
 
+// -- Global game round data --
 const games = {
   guessNumber: Math.floor(Math.random() * 100) + 1,
-  scrambledWord: '',
-  trivia: null
+  scrambleWords: ['banana', 'elephant', 'discord', 'javascript', 'pirate']
 };
 
 const triviaQuestions = [
@@ -41,8 +44,10 @@ const triviaQuestions = [
   { question: '2 + 2 * 2 = ?', answer: '6' }
 ];
 
-const scrambleWords = ['banana', 'elephant', 'discord', 'javascript', 'pirate'];
 const scramble = word => word.split('').sort(() => 0.5 - Math.random()).join('');
+
+// -- Per-user game state tracking --
+const userStates = new Map();
 
 client.once('ready', () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
@@ -50,9 +55,16 @@ client.once('ready', () => {
 
 client.on('messageCreate', async message => {
   if (message.author.bot || !message.guild) return;
-  const content = message.content.trim();
-  const guildId = message.guild.id;
+  const uid = message.author.id;
+  const raw = message.content.trim();
+  const content = raw.toLowerCase();
 
+  // initialize per-user state
+  if (!userStates.has(uid)) userStates.set(uid, {});
+  const state = userStates.get(uid);
+
+  // initialize ticket setup per guild
+  const guildId = message.guild.id;
   if (!ticketSetup.has(guildId)) {
     ticketSetup.set(guildId, {
       description: '',
@@ -62,10 +74,10 @@ client.on('messageCreate', async message => {
       footerImage: null
     });
   }
-
   const setup = ticketSetup.get(guildId);
 
-  // --- Ticket & messaging commands ---
+  // -- Ticket & messaging commands --
+
   if (content === '!help') {
     return message.channel.send(`📘 **Bot Command Overview**
 🎟️ **Ticket System**
@@ -87,14 +99,14 @@ client.on('messageCreate', async message => {
   }
 
   if (content.startsWith('!ticket ')) {
-    setup.description = content.slice(8).trim();
+    setup.description = raw.slice(8).trim();
     const attachment = message.attachments.first();
     setup.footerImage = attachment?.url ?? null;
     return message.reply('✅ Ticket message set.');
   }
 
   if (content.startsWith('!option ')) {
-    const args = content.slice(8).split(' ');
+    const args = raw.slice(8).trim().split(' ');
     const emoji = args.shift();
     const label = args.join(' ');
     if (!emoji || !label) return message.reply('Usage: `!option <emoji> <label>`');
@@ -104,14 +116,14 @@ client.on('messageCreate', async message => {
   }
 
   if (content.startsWith('!ticketviewer')) {
-    const match = content.match(/<@&(\d+)>/);
+    const match = raw.match(/<@&(\d+)>/);
     if (!match) return message.reply('❌ Mention a valid role.');
     setup.viewerRoleId = match[1];
     return message.reply('✅ Viewer role set.');
   }
 
   if (content.startsWith('!ticketcategory')) {
-    const match = content.match(/<#(\d+)>/);
+    const match = raw.match(/<#(\d+)>/);
     if (!match) return message.reply('❌ Mention a valid channel.');
     const channel = message.guild.channels.cache.get(match[1]);
     if (!channel?.parentId) return message.reply('❌ Channel has no category.');
@@ -124,7 +136,6 @@ client.on('messageCreate', async message => {
     if (!setup.description || !setup.options.length || !setup.viewerRoleId || !setup.categoryId) {
       return message.reply('❌ Setup incomplete.');
     }
-
     const embed = new EmbedBuilder()
       .setTitle('📩 Open a Ticket')
       .setDescription(setup.description)
@@ -134,12 +145,13 @@ client.on('messageCreate', async message => {
     const menu = new StringSelectMenuBuilder()
       .setCustomId('ticket_select')
       .setPlaceholder('Select a ticket category')
-      .addOptions(setup.options.map((opt, i) => ({
-        label: opt.label,
-        value: `ticket_${i}`,
-        emoji: opt.emoji
-      })));
-
+      .addOptions(
+        setup.options.map((opt, i) => ({
+          label: opt.label,
+          value: `ticket_${i}`,
+          emoji: opt.emoji
+        }))
+      );
     const row = new ActionRowBuilder().addComponents(menu);
     const panel = await message.channel.send({ embeds: [embed], components: [row] });
 
@@ -149,81 +161,104 @@ client.on('messageCreate', async message => {
   }
 
   if (content.startsWith('!msg ')) {
-    const text = content.slice(5).trim();
-    if (text) {
-      await message.channel.send(text);
+    const txt = raw.slice(5).trim();
+    if (txt) {
+      await message.channel.send(txt);
       await message.delete().catch(() => {});
     }
   }
 
   if (content.startsWith('!dm ')) {
-    const [roleMention, ...rest] = content.slice(4).trim().split(' ');
-    const msg = rest.join(' ');
+    const [roleMention, ...rest] = raw.slice(4).trim().split(' ');
+    const txt = rest.join(' ');
     const roleMatch = roleMention.match(/^<@&(\d+)>$/);
     const role = roleMatch && message.guild.roles.cache.get(roleMatch[1]);
     if (!role) return message.reply('❌ Role not found.');
     let sent = 0;
     for (const member of role.members.values()) {
-      member.send(msg).then(() => sent++).catch(() => {});
+      member.send(txt).then(() => sent++).catch(() => {});
     }
     message.delete().catch(() => {});
     console.log(`✅ DMs sent: ${sent}`);
   }
 
-  // --- Mini-Games: properly inside listener ---
+  // -- 🎯 GUESS game --
   if (content.startsWith('!guess ')) {
     const num = parseInt(content.split(' ')[1]);
-    if (isNaN(num)) return message.reply('❓ Enter a number.');
+    if (isNaN(num)) return message.reply('❓ Enter a valid number.');
+
+    state.guess = { active: true, answered: false, answer: games.guessNumber };
     if (num === games.guessNumber) {
-      message.reply(`🎉 Correct! It was ${games.guessNumber}. New game starts!`);
+      message.reply(`🎉 Correct! It was ${games.guessNumber}.`);
       games.guessNumber = Math.floor(Math.random() * 100) + 1;
+      state.guess = null;
     } else {
       message.reply(num < games.guessNumber ? '🔼 Too low!' : '🔽 Too high!');
+      state.guess.answered = true;
     }
+    return;
+  } else if (state.guess?.active && !state.guess.answered) {
+    const num = parseInt(raw);
+    if (!isNaN(num) && num !== state.guess.answer) {
+      message.reply(num < state.guess.answer ? '🔼 Too low!' : '🔽 Too high!');
+      state.guess.answered = true;
+    }
+    return;
   }
 
+  // -- 🧠 TRIVIA game --
   if (content === '!trivia') {
     const q = triviaQuestions[Math.floor(Math.random() * triviaQuestions.length)];
-    games.trivia = q;
+    state.trivia = { active: true, answered: false, answer: q.answer };
     message.channel.send(`❓ ${q.question}`);
-  } else if (games.trivia) {
-    const guess = content.toLowerCase();
-    if (guess === games.trivia.answer) {
+    return;
+  } else if (state.trivia?.active) {
+    if (content === state.trivia.answer) {
       message.reply('✅ Correct!');
-      games.trivia = null;
-    } else {
+      state.trivia = null;
+    } else if (!state.trivia.answered) {
       message.reply('❌ Wrong answer, try again!');
+      state.trivia.answered = true;
     }
+    return;
   }
 
+  // -- 🔤 SCRAMBLE game --
   if (content === '!scramble') {
-    const word = scrambleWords[Math.floor(Math.random() * scrambleWords.length)];
-    games.scrambledWord = word;
+    const word = games.scrambleWords[Math.floor(Math.random() * games.scrambleWords.length)];
+    state.scramble = { active: true, answered: false, answer: word };
     message.channel.send(`🔤 Unscramble this: **${scramble(word)}**`);
-  } else if (games.scrambledWord && content.toLowerCase() === games.scrambledWord) {
-    message.reply(`✅ Well done! The word was **${games.scrambledWord}**`);
-    games.scrambledWord = '';
+    return;
+  } else if (state.scramble?.active) {
+    if (content === state.scramble.answer) {
+      message.reply(`✅ Well done! The word was **${state.scramble.answer}**`);
+      state.scramble = null;
+    } else if (!state.scramble.answered) {
+      message.reply('❌ Nope, that’s not it!');
+      state.scramble.answered = true;
+    }
+    return;
   }
 
+  // -- 📄 RPS game --
   if (content.startsWith('!rps ')) {
     const player = content.split(' ')[1]?.toLowerCase();
-    const options = ['rock', 'paper', 'scissors'];
-    if (!options.includes(player)) {
-      return message.reply('🪨 📄 ✂️ Choose rock, paper, or scissors.');
-    }
-    const bot = options[Math.floor(Math.random() * 3)];
-    const result = player === bot
-      ? 'Draw!'
-      : (player === 'rock' && bot === 'scissors') ||
-        (player === 'paper' && bot === 'rock') ||
-        (player === 'scissors' && bot === 'paper')
-      ? 'You win!'
-      : 'I win!';
-    message.reply(`You chose **${player}**, I chose **${bot}** → ${result}`);
+    const opts = ['rock', 'paper', 'scissors'];
+    if (!opts.includes(player)) return message.reply('🪨 📄 ✂️ Choose rock, paper, or scissors.');
+    const botPick = opts[Math.floor(Math.random() * opts.length)];
+    const result =
+      player === botPick
+        ? 'Draw!'
+        : (player === 'rock' && botPick === 'scissors') ||
+          (player === 'paper' && botPick === 'rock') ||
+          (player === 'scissors' && botPick === 'paper')
+        ? 'You win!'
+        : 'I win!';
+    message.reply(`You chose **${player}**, I chose **${botPick}** → ${result}`);
   }
-}); // end messageCreate
+});
 
-// --- Ticket panel interaction ---
+// -- Ticket panel & interaction handler --
 client.on('interactionCreate', async interaction => {
   if (!interaction.guild) return;
   const setup = ticketSetup.get(interaction.guild.id);
@@ -232,8 +267,8 @@ client.on('interactionCreate', async interaction => {
   }
 
   if (interaction.isStringSelectMenu() && interaction.customId === 'ticket_select') {
-    const index = parseInt(interaction.values[0].split('_')[1]);
-    const option = setup.options[index];
+    const idx = parseInt(interaction.values[0].split('_')[1]);
+    const option = setup.options[idx];
     const user = interaction.user;
 
     const existing = interaction.guild.channels.cache.find(c =>
@@ -246,65 +281,48 @@ client.on('interactionCreate', async interaction => {
       });
     }
 
-    const tn = `ticket-${user.username.toLowerCase().replace(/\s+/g, '-')}-${Date.now().toString().slice(-4)}`;
-    const ch = await interaction.guild.channels.create({
-      name: tn,
+    const chName = `ticket-${user.username.toLowerCase().replace(/\s+/g, '-')}-${Date.now().toString().slice(-4)}`;
+    const channel = await interaction.guild.channels.create({
+      name: chName,
       type: 0,
       parent: setup.categoryId,
       permissionOverwrites: [
         { id: interaction.guild.roles.everyone, deny: [PermissionsBitField.Flags.ViewChannel] },
-        { id: user.id, allow: [
-            PermissionsBitField.Flags.ViewChannel,
-            PermissionsBitField.Flags.SendMessages,
-            PermissionsBitField.Flags.ReadMessageHistory
-          ] },
-        { id: setup.viewerRoleId, allow: [
-            PermissionsBitField.Flags.ViewChannel,
-            PermissionsBitField.Flags.SendMessages,
-            PermissionsBitField.Flags.ReadMessageHistory
-          ] }
+        { id: user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory] },
+        { id: setup.viewerRoleId, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory] }
       ]
     });
 
-    await ch.send({
+    await channel.send({
       content: `🎫 <@${user.id}> created a ticket for **${option.label}**. <@&${setup.viewerRoleId}>`,
       allowedMentions: { users: [user.id], roles: [setup.viewerRoleId] }
     });
 
     const deleteBtn = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId('ticket_delete')
-        .setLabel('Delete Ticket')
-        .setStyle(ButtonStyle.Danger)
+      new ButtonBuilder().setCustomId('ticket_delete').setLabel('Delete Ticket').setStyle(ButtonStyle.Danger)
     );
-    await ch.send({ content: '🗑️ Click below to close and get transcript.', components: [deleteBtn] });
-
-    await interaction.reply({ content: `✅ Ticket created: <#${ch.id}>`, ephemeral: true });
+    await channel.send({ content: '🗑️ Click to close & get transcript.', components: [deleteBtn] });
+    await interaction.reply({ content: `✅ Ticket created: <#${channel.id}>`, ephemeral: true });
   }
 
   if (interaction.isButton() && interaction.customId === 'ticket_delete') {
-    const ch = interaction.channel;
-    if (!ch.name.startsWith('ticket-')) return;
+    const channel = interaction.channel;
+    if (!channel.name.startsWith('ticket-')) return;
 
     await interaction.reply({ content: '🗂️ Generating transcript...', ephemeral: true });
-    const msgs = await ch.messages.fetch({ limit: 100 });
-    const transcript = [...msgs.values()].reverse()
-      .map(m => `${m.author.tag}: ${m.content}`)
-      .join('\n');
-    const file = new AttachmentBuilder(Buffer.from(transcript, 'utf-8'), { name: 'transcript.txt' });
+    const msgs = await channel.messages.fetch({ limit: 100 });
+    const transcript = msgs.reverse().map(m => `${m.author.tag}: ${m.content}`).join('\n');
+    const attachment = new AttachmentBuilder(Buffer.from(transcript, 'utf-8'), { name: 'transcript.txt' });
 
-    const username = ch.name.split('-')[1];
+    const usernamePart = channel.name.split('-')[1];
     const member = interaction.guild.members.cache.find(m =>
-      m.user.username.toLowerCase().startsWith(username)
+      m.user.username.toLowerCase().startsWith(usernamePart)
     );
     if (member) {
-      member.send({
-        content: `📁 Your ticket was closed by **${interaction.user.tag}**.`,
-        files: [file]
-      }).catch(() => {});
+      member.send({ content: `📁 Your ticket was closed by **${interaction.user.tag}**.`, files: [attachment] }).catch(() => {});
     }
 
-    setTimeout(() => ch.delete().catch(() => {}), 3000);
+    setTimeout(() => channel.delete().catch(() => {}), 3000);
   }
 });
 
