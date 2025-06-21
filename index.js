@@ -226,7 +226,7 @@ client.on('interactionCreate', async interaction => {
   if (!interaction.guild) return;
   const setup = ticketSetup.get(interaction.guild.id);
 
-  if (!setup || !setup.options.length || !setup.viewer...RoleId || !setup.categoryId) {
+ if (!setup || !setup.options.length || !setup.viewerRoleId || !setup.categoryId) {
     return interaction.reply({
       content: '❌ Ticket system is not fully configured on this server.',
       ephemeral: true
