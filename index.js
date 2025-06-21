@@ -220,7 +220,10 @@ client.on('messageCreate', async message => {
     message.channel.send(`🔤 Unscramble this: **${scramble(word)}**`);
   }
 
-  if (games.scrambledWord && content.toLowerCase() === games.scrambledWordscrambledWord = '';
+  if (games.scrambledWord && content.toLowerCase() === games.scrambledWord.toLowerCase()) {
+  message.reply(`✅ Well done! The word was **${games.scrambledWord}**`);
+  games.scrambledWord = '';
+}
   }
 });
 
