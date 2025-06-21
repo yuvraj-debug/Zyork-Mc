@@ -7,7 +7,10 @@ const {
   EmbedBuilder,
   ActionRowBuilder,
   StringSelectMenuBuilder,
-  PermissionsBitField
+  ButtonBuilder,
+  ButtonStyle,
+  PermissionsBitField,
+  AttachmentBuilder
 } = require('discord.js');
 
 const app = express();
@@ -68,15 +71,15 @@ client.on('messageCreate', async message => {
 📝 \`!ticket <message>\` — Set ticket message  
 ➕ \`!option <emoji> <label>\` — Add a category  
 🎭 \`!ticketviewer @role\` — Set viewer role  
-📂 \`!ticketcategory #channel\` — Set category  
-🚀 \`!deployticketpanel\` — Deploy dropdown menu  
-🗑️ \`!close\` — Close ticket
+📂 \`!ticketcategory #channel\` — Set ticket category (uses #channel's parent)  
+🚀 \`!deployticketpanel\` — Deploy dropdown panel  
+🗑️ **Delete Ticket** button — Close ticket & receive transcript
 
 🎮 **Mini-Games**
 🎯 \`!guess <number>\` — Guess a number  
 🧠 \`!trivia\` — Trivia question  
 🔤 \`!scramble\` — Unscramble word  
-🤖 \`!rps <rock|paper|scissors>\` — RPS game
+🤖 \`!rps <rock|paper|scissors>\` — Rock paper scissors
 
 📬 **Messaging Tools**
 💬 \`!msg <message>\` — Bot says message  
@@ -115,7 +118,8 @@ client.on('messageCreate', async message => {
     const channel = message.guild.channels.cache.get(match[1]);
     if (!channel?.parentId) return message.reply('❌ Channel has no category.');
     setup.categoryId = channel.parentId;
-    return message.reply(`✅ Ticket category set.`);
+    const parent = message.guild.channels.cache.get(setup.categoryId);
+    return message.reply(`✅ Ticket category set to **${parent?.name || 'Unnamed'}**.`);
   }
 
   if (content === '!deployticketpanel') {
@@ -123,17 +127,12 @@ client.on('messageCreate', async message => {
       return message.reply('❌ Setup incomplete.');
     }
 
-    const fetched = await message.channel.messages.fetch({ limit: 100 });
-    await message.channel.bulkDelete(fetched, true).catch(() => {});
-
     const embed = new EmbedBuilder()
       .setTitle('📩 Open a Ticket')
       .setDescription(setup.description)
       .setColor('Blue');
 
-    if (setup.footerImage) {
-      embed.setImage(setup.footerImage);
-    }
+    if (setup.footerImage) embed.setImage(setup.footerImage);
 
     const menu = new StringSelectMenuBuilder()
       .setCustomId('ticket_select')
@@ -149,14 +148,6 @@ client.on('messageCreate', async message => {
     const row = new ActionRowBuilder().addComponents(menu);
     await message.channel.send({ embeds: [embed], components: [row] });
     return message.reply('✅ Dropdown ticket panel deployed.');
-  }
-
-  if (content === '!close') {
-    if (!message.channel.name.startsWith('ticket-')) {
-      return message.reply('❌ This is not a ticket channel.');
-    }
-    await message.reply('🗑️ Closing...');
-    setTimeout(() => message.channel.delete(), 3000);
   }
 
   if (content.startsWith('!msg ')) {
@@ -227,25 +218,26 @@ client.on('messageCreate', async message => {
 
   if (games.scrambledWord && content.toLowerCase() === games.scrambledWord) {
     message.reply(`✅ Well done! The word was **${games.scrambledWord}**`);
-    gamesscrambledWord = '';
+    games.scrambledWord = '';
   }
 });
 
 client.on('interactionCreate', async interaction => {
   if (!interaction.guild) return;
-
   const setup = ticketSetup.get(interaction.guild.id);
-  if (!setup || !setup.options.length || !setup.viewerRoleId || !setup.categoryId) {
+
+  if (!setup || !setup.options.length || !setup.viewer...RoleId || !setup.categoryId) {
     return interaction.reply({
       content: '❌ Ticket system is not fully configured on this server.',
       ephemeral: true
     });
   }
 
+  const user = interaction.user;
+
   if (interaction.isStringSelectMenu() && interaction.customId === 'ticket_select') {
     const index = parseInt(interaction.values[0].split('_')[1]);
     const option = setup.options[index];
-    const user = interaction.user;
 
     const existing = interaction.guild.channels.cache.find(c =>
       c.name.startsWith(`ticket-${user.username.toLowerCase()}`)
@@ -260,7 +252,7 @@ client.on('interactionCreate', async interaction => {
 
     const ticketName = `ticket-${user.username.toLowerCase().replace(/\s+/g, '-')}-${Date.now().toString().slice(-4)}`;
 
-    const ticketChannel = await interaction.guild.channels.create({
+    const channel = await interaction.guild.channels.create({
       name: ticketName,
       type: 0,
       parent: setup.categoryId,
@@ -288,15 +280,57 @@ client.on('interactionCreate', async interaction => {
       ]
     });
 
-    await ticketChannel.send({
+    await channel.send({
       content: `🎫 <@${user.id}> created a ticket for **${option.label}**. <@&${setup.viewerRoleId}>`,
       allowedMentions: { users: [user.id], roles: [setup.viewerRoleId] }
     });
 
+    const closeRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('ticket_delete')
+        .setLabel('Delete Ticket')
+        .setStyle(ButtonStyle.Danger)
+    );
+
+    await channel.send({
+      content: '🗑️ Click the button below to close this ticket and receive a transcript.',
+      components: [closeRow]
+    });
+
     await interaction.reply({
-      content: `✅ Ticket created: <#${ticketChannel.id}>`,
+      content: `✅ Ticket created: <#${channel.id}>`,
       ephemeral: true
     });
+  }
+
+  if (interaction.isButton() && interaction.customId === 'ticket_delete') {
+    const channel = interaction.channel;
+    if (!channel.name.startsWith('ticket-')) return;
+
+    await interaction.reply({ content: '🗂️ Generating transcript and closing ticket...', ephemeral: true });
+
+    const messages = await channel.messages.fetch({ limit: 100 });
+    const transcriptText = [...messages.values()]
+      .reverse()
+      .map(m => `${m.author.tag}: ${m.content}`)
+      .join('\n');
+
+    const buffer = Buffer.from(transcriptText, 'utf-8');
+    const file = new AttachmentBuilder(buffer, { name: 'transcript.txt' });
+
+    const username = channel.name.split('-')[1];
+    const ticketUser = interaction.guild.members.cache.find(m =>
+      m.user.username.toLowerCase().startsWith(username)
+    );
+
+    if (ticketUser) {
+      ticketUser.send({
+        content: `📁 Your ticket was closed by **${interaction.user.tag}**.`,
+        files: [file]
+      }).catch(() => {});
+    }
+
+    setTimeout(() => channel.delete().catch(() => {}), 3000);
   }
 });
 
