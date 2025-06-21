@@ -65,15 +65,15 @@ client.on('messageCreate', async message => {
   const setup = ticketSetup.get(guildId);
 
   if (content === '!help') {
-  const helpText = `📘 **Bot Command Overview**
+    const helpText = `📘 **Bot Command Overview**
 
 🎟️ **Ticket System**
 📝 \`!ticket <message>\` — Set ticket message  
 ➕ \`!option <emoji> <label>\` — Add a category  
 🎭 \`!ticketviewer @role\` — Set viewer role  
-📂 \`!ticketcategory #channel\` — Set ticket category  
-🚀 \`!deployticketpanel\` — Deploy dropdown panel  
-🗑️ Delete button — Close ticket & receive transcript
+📂 \`!ticketcategory #channel\` — Use channel's category for tickets  
+🚀 \`!deployticketpanel\` — Deploy dropdown ticket menu  
+🗑️ Button — Close ticket & receive transcript
 
 🎮 **Mini-Games**
 🎯 \`!guess <number>\` — Guess a number  
@@ -82,13 +82,12 @@ client.on('messageCreate', async message => {
 🤖 \`!rps <rock|paper|scissors>\` — Rock paper scissors
 
 📬 **Messaging Tools**
-💬 \`!msg <message>\` — Bot says message  
+💬 \`!msg <message>\` — Bot says a message  
 📨 \`!dm @role <message>\` — DM a role
 
 ℹ️ \`!help\` — Show this guide`;
-
-  return message.channel.send(helpText);
-}
+    return message.channel.send(helpText);
+  }
 
   if (content.startsWith('!ticket ')) {
     setup.description = content.slice(8).trim();
@@ -148,8 +147,11 @@ client.on('messageCreate', async message => {
       );
 
     const row = new ActionRowBuilder().addComponents(menu);
-    await message.channel.send({ embeds: [embed], components: [row] });
-    return message.reply('✅ Dropdown ticket panel deployed.');
+    const panelMessage = await message.channel.send({ embeds: [embed], components: [row] });
+
+    const fetched = await message.channel.messages.fetch({ limit: 100 });
+    const deletables = fetched.filter(msg => msg.id !== panelMessage.id && msg.id !== message.id);
+    await message.channel.bulkDelete(deletables, true).catch(() => {});
   }
 
   if (content.startsWith('!msg ')) {
@@ -218,9 +220,7 @@ client.on('messageCreate', async message => {
     message.channel.send(`🔤 Unscramble this: **${scramble(word)}**`);
   }
 
-  if (games.scrambledWord && content.toLowerCase() === games.scrambledWord) {
-    message.reply(`✅ Well done! The word was **${games.scrambledWord}**`);
-    games.scrambledWord = '';
+  if (games.scrambledWord && content.toLowerCase() === games.scrambledWordscrambledWord = '';
   }
 });
 
@@ -228,7 +228,7 @@ client.on('interactionCreate', async interaction => {
   if (!interaction.guild) return;
   const setup = ticketSetup.get(interaction.guild.id);
 
- if (!setup || !setup.options.length || !setup.viewerRoleId || !setup.categoryId) {
+  if (!setup || !setup.options.length || !setup.viewerRoleId || !setup.categoryId) {
     return interaction.reply({
       content: '❌ Ticket system is not fully configured on this server.',
       ephemeral: true
@@ -287,7 +287,7 @@ client.on('interactionCreate', async interaction => {
       allowedMentions: { users: [user.id], roles: [setup.viewerRoleId] }
     });
 
-    const closeRow = new ActionRowBuilder().addComponents(
+    const deleteRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId('ticket_delete')
         .setLabel('Delete Ticket')
@@ -296,7 +296,7 @@ client.on('interactionCreate', async interaction => {
 
     await channel.send({
       content: '🗑️ Click the button below to close this ticket and receive a transcript.',
-      components: [closeRow]
+      components: [deleteRow]
     });
 
     await interaction.reply({
@@ -312,21 +312,21 @@ client.on('interactionCreate', async interaction => {
     await interaction.reply({ content: '🗂️ Generating transcript and closing ticket...', ephemeral: true });
 
     const messages = await channel.messages.fetch({ limit: 100 });
-    const transcriptText = [...messages.values()]
+    const transcript = [...messages.values()]
       .reverse()
       .map(m => `${m.author.tag}: ${m.content}`)
       .join('\n');
 
-    const buffer = Buffer.from(transcriptText, 'utf-8');
+    const buffer = Buffer.from(transcript, 'utf-8');
     const file = new AttachmentBuilder(buffer, { name: 'transcript.txt' });
 
     const username = channel.name.split('-')[1];
-    const ticketUser = interaction.guild.members.cache.find(m =>
+    const member = interaction.guild.members.cache.find(m =>
       m.user.username.toLowerCase().startsWith(username)
     );
 
-    if (ticketUser) {
-      ticketUser.send({
+    if (member) {
+      member.send({
         content: `📁 Your ticket was closed by **${interaction.user.tag}**.`,
         files: [file]
       }).catch(() => {});
