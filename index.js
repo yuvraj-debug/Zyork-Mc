@@ -342,7 +342,7 @@ client.on('interactionCreate', async interaction => {
 
     setTimeout(() => channel.delete().catch(() => {}), 3000);
   }
-});
+}); // 👈 This closes client.on('interactionCreate', ...)
 
 process.on('unhandledRejection', err => {
   console.error('Unhandled Rejection:', err);
