@@ -220,8 +220,16 @@ client.on('messageCreate', async message => {
     message.channel.send(`🔤 Unscramble this: **${scramble(word)}**`);
   }
 
-if (games.scrambledWord && content.toLowerCase() === games.scrambledWord.toLowerCase()) {
-  message.reply(`✅ Well done! The word was **${games.scrambledWord}**`);
+if (
+  games.scrambledWord && 
+  typeof content === 'string' && 
+  content.toLowerCase() === games.scrambledWord.toLowerCase()
+) {
+  try {
+    await message.reply(`✅ Well done! The word was **${games.scrambledWord}**`);
+  } catch (err) {
+    console.error('❌ Failed to send scramble reply:', err);
+  }
   games.scrambledWord = '';
 }
 client.on('interactionCreate', async interaction => {
