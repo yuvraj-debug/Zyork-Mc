@@ -61,32 +61,40 @@ client.on('messageCreate', async message => {
 
   const setup = ticketSetup.get(guildId);
 
-  if (content === '!help') {
-    return message.channel.send(
-`📘 Bot Command Overview
+if (content === '!help') {
+  return message.channel.send(`
+📘 **Bot Command Overview**
 
-🎟️ Ticket System
-!ticket <message> — Set the description that appears in the ticket panel.
-!option <emoji> <label> — Add a ticket button (max 10).
-!ticketviewer @role — Assign support staff role.
-!ticketcategory #channel — Set the category for ticket channels.
-!deployticketpanel — Deploy the ticket panel with buttons.
-!close — Close the current ticket channel.
+━━━━━━━━━━━━━━━━━━━━
+🎟️ **Ticket System**
+━━━━━━━━━━━━━━━━━━━━
+📝 \`!ticket <message>\` — Set the message for the ticket panel embed.
+➕ \`!option <emoji> <label>\` — Add a ticket button (up to 10 max).
+🎭 \`!ticketviewer @role\` — Role allowed to view all ticket channels.
+📂 \`!ticketcategory #channel\` — Use category from the given channel.
+🚀 \`!deployticketpanel\` — Deploy the interactive ticket panel.
+🗑️ \`!close\` — Close the current ticket channel.
 
-🎮 Mini-Games
-!guess <number> — Guess a number between 1 and 100.
-!trivia — Answer a random trivia question.
-!scramble — Unscramble a mixed-up word.
-!rps <rock|paper|scissors> — Rock-Paper-Scissors game.
+━━━━━━━━━━━━━━━━━━━━
+🎮 **Mini-Games**
+━━━━━━━━━━━━━━━━━━━━
+🎯 \`!guess <number>\` — Guess the mystery number (1–100).
+🧠 \`!trivia\` — Answer a random trivia question.
+🔤 \`!scramble\` — Unscramble a shuffled word.
+🤖 \`!rps <rock|paper|scissors>\` — Play Rock-Paper-Scissors.
 
-📬 Messaging Tools
-!msg <message> — Sends a message and deletes the original command.
-!dm @role <message> — DM everyone with the mentioned role.
+━━━━━━━━━━━━━━━━━━━━
+📬 **Messaging Tools**
+━━━━━━━━━━━━━━━━━━━━
+💬 \`!msg <message>\` — Send a message via the bot.
+📨 \`!dm @role <message>\` — DM all members with the mentioned role.
 
-ℹ️ Utilities
-!help — Display this help message.`
-    );
-  }
+━━━━━━━━━━━━━━━━━━━━
+ℹ️ **Utilities**
+━━━━━━━━━━━━━━━━━━━━
+📖 \`!help\` — Display this command guide.
+  `);
+}
 
   if (content.startsWith('!ticket ')) {
     setup.description = content.slice(8).trim();
