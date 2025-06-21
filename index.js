@@ -25,7 +25,7 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
-const ticketSetup = new Map(); // Stores setup data per guild
+const ticketSetup = new Map(); // per-guild setup
 
 client.once('ready', () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
@@ -48,16 +48,15 @@ client.on('messageCreate', async message => {
   const setup = ticketSetup.get(guildId);
 
   if (content === '!help') {
-    const helpText = `
+    return message.channel.send(`
 **🎟️ Ticket Commands**
-\`!ticket <message>\` — Set the ticket embed description.
+\`!ticket <message>\` — Set the panel description.
 \`!option <emoji> <label>\` — Add a ticket button.
 \`!ticketviewer @role\` — Set role that can view ticket channels.
-\`!ticketcategory #category\` — Set the category for ticket channels.
+\`!ticketcategory #channel\` — Use the category of a text channel.
 \`!deployticketpanel\` — Post the ticket panel.
-\`!close\` — Close (delete) the current ticket channel.
-    `;
-    return message.channel.send(helpText);
+\`!close\` — Delete the current ticket channel.
+    `);
   }
 
   if (content.startsWith('!ticket ')) {
@@ -84,9 +83,11 @@ client.on('messageCreate', async message => {
 
   if (content.startsWith('!ticketcategory')) {
     const match = content.match(/<#(\d+)>/);
-    if (!match) return message.reply('❌ Mention a valid category.');
-    setup.categoryId = match[1];
-    return message.reply('✅ Ticket category set.');
+    if (!match) return message.reply('❌ Mention a valid text channel.');
+    const channel = message.guild.channels.cache.get(match[1]);
+    if (!channel || !channel.parentId) return message.reply('❌ Couldn’t find a category for that channel.');
+    setup.categoryId = channel.parentId;
+    return message.reply(`✅ Category set from parent of #${channel.name}`);
   }
 
   if (content === '!deployticketpanel') {
@@ -124,8 +125,7 @@ client.on('messageCreate', async message => {
 });
 
 client.on('interactionCreate', async interaction => {
-  if (!interaction.isButton()) return;
-  if (!interaction.guild) return;
+  if (!interaction.isButton() || !interaction.guild) return;
 
   const setup = ticketSetup.get(interaction.guild.id);
   if (!setup || !setup.options.length || !setup.categoryId || !setup.viewerRoleId) {
@@ -135,15 +135,16 @@ client.on('interactionCreate', async interaction => {
   const optionIndex = parseInt(interaction.customId.split('_')[1]);
   const option = setup.options[optionIndex];
   const user = interaction.user;
+  const guild = interaction.guild;
   const channelName = `ticket-${user.username.toLowerCase()}`.replace(/\s+/g, '-');
 
-  const channel = await interaction.guild.channels.create({
+  const channel = await guild.channels.create({
     name: channelName,
-    type: 0, // Text channel
+    type: 0,
     parent: setup.categoryId,
     permissionOverwrites: [
       {
-        id: interaction.guild.roles.everyone,
+        id: guild.roles.everyone,
         deny: [PermissionsBitField.Flags.ViewChannel]
       },
       {
