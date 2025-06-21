@@ -55,14 +55,15 @@ client.on('messageCreate', async message => {
       description: '',
       options: [],
       viewerRoleId: null,
-      categoryId: null
+      categoryId: null,
+      footerImage: null
     });
   }
 
   const setup = ticketSetup.get(guildId);
 
-if (content === '!help') {
-  await message.channel.send(`
+  if (content === '!help') {
+    await message.channel.send(`
 📘 **Bot Command Overview**
 
 ━━━━━━━━━━━━━━━━━━━━
@@ -93,13 +94,19 @@ if (content === '!help') {
 ℹ️ **Utilities**
 ━━━━━━━━━━━━━━━━━━━━
 📖 \`!help\` — Display this command guide.
-  `);
-  return; // ✅ This ensures no other response is sent after
-}
+    `);
+    return;
+  }
 
   if (content.startsWith('!ticket ')) {
     setup.description = content.slice(8).trim();
-    return message.reply('✅ Ticket panel message set.');
+    const attachment = message.attachments.first();
+    if (attachment && attachment.contentType?.startsWith('image/')) {
+      setup.footerImage = attachment.url;
+    } else {
+      setup.footerImage = null;
+    }
+    return message.reply('✅ Ticket panel message set. Use `!deployticketpanel` when ready.');
   }
 
   if (content.startsWith('!option ')) {
@@ -130,13 +137,21 @@ if (content === '!help') {
 
   if (content === '!deployticketpanel') {
     if (!setup.description || !setup.options.length || !setup.viewerRoleId || !setup.categoryId) {
-      return message.reply('❌ Incomplete setup. Make sure all parts are configured.');
+      return message.reply('❌ Incomplete setup. Please configure everything first.');
     }
+
+    const fetched = await message.channel.messages.fetch({ limit: 100 });
+    const toDelete = fetched.filter(msg => msg.id !== message.id);
+    await message.channel.bulkDelete(toDelete, true).catch(() => {});
 
     const embed = new EmbedBuilder()
       .setTitle('📩 Open a Ticket')
       .setDescription(setup.description)
       .setColor('Blue');
+
+    if (setup.footerImage) {
+      embed.setImage(setup.footerImage);
+    }
 
     const row = new ActionRowBuilder();
     setup.options.forEach((opt, i) => {
@@ -150,7 +165,7 @@ if (content === '!help') {
     });
 
     await message.channel.send({ embeds: [embed], components: [row] });
-    return message.reply('✅ Ticket panel deployed.');
+    return message.reply('✅ Ticket panel deployed. Previous messages cleared.');
   }
 
   if (content === '!close') {
@@ -245,7 +260,7 @@ client.on('interactionCreate', async interaction => {
   }
 
   const optionIndex = parseInt(interaction.customId.split('_')[1]);
-   const option = setup.options[optionIndex];
+  const option = setup.options[optionIndex];
   const user = interaction.user;
   const ticketName = `ticket-${user.username.toLowerCase().replace(/\s+/g, '-')}-${Date.now().toString().slice(-4)}`;
 
