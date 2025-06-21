@@ -348,4 +348,4 @@ process.on('unhandledRejection', err => {
   console.error('Unhandled Rejection:', err);
 });
 
-client.login(process.env.DISCORD_TOKEN);
+client.login(process.env.DISCORD_TOKEN);})
