@@ -25,7 +25,7 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
-const ticketSetup = new Map(); // Store config per guild
+const ticketSetup = new Map(); // per-server setup
 
 client.once('ready', () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
@@ -47,27 +47,38 @@ client.on('messageCreate', async message => {
 
   const setup = ticketSetup.get(guildId);
 
-  // 📖 Help Command
+  // 🆘 HELP COMMAND
   if (content === '!help') {
     return message.channel.send(`
-**🤖 Bot Commands**
+📘 **Bot Command Reference**
 
-🎫 **Ticket System**
-\`!ticket <message>\` — Set the panel embed description.
-\`!option <emoji> <label>\` — Add a ticket button (up to 10).
-\`!ticketviewer @role\` — Set the role that can view ticket channels.
-\`!ticketcategory #channel\` — Set the ticket category from a channel's parent.
-\`!deployticketpanel\` — Send the ticket panel with buttons.
-\`!close\` — Close the current ticket channel.
+🎫 **Ticket System Setup**
+\`!ticket <message>\` — Set the embed description shown in the ticket panel.
+\`!option <emoji> <label>\` — Add a ticket button (up to 10 max).
+\`!ticketviewer @role\` — Set the role that should have access to all ticket channels.
+\`!ticketcategory #channel\` — Sets the ticket category by using the parent of the mentioned text channel.
+\`!deployticketpanel\` — Deploys the configured ticket panel with buttons.
+\`!close\` — Closes (deletes) the current ticket channel.
 
-ℹ️ Use these to fully configure your custom ticket system!
+📬 **Messaging Tools**
+\`!msg <message>\` — Sends a message in the channel and deletes your original command.
+\`!dm <@role> <message>\` — Sends a DM to every member with the specified role (use with care!).
+
+🧪 **Utility & Meta**
+\`!help\` — Displays this list of all available commands.
+
+💡 **Pro Tips**
+- Configure all ticket settings before using \`!deployticketpanel\`.
+- Each server keeps its own setup (multi-server ready).
+- You can add more features like transcript saving, close buttons, or user limits. Just ask!
+
     `);
   }
 
-  // 🧱 Ticket Setup Commands
+  // 🎟️ Ticket Setup Commands
   if (content.startsWith('!ticket ')) {
     setup.description = content.slice(8).trim();
-    return message.reply('✅ Ticket message set.');
+    return message.reply('✅ Ticket panel message set.');
   }
 
   if (content.startsWith('!option ')) {
@@ -75,30 +86,30 @@ client.on('messageCreate', async message => {
     const emoji = args.shift();
     const label = args.join(' ');
     if (!emoji || !label) return message.reply('Usage: `!option <emoji> <label>`');
-    if (setup.options.length >= 10) return message.reply('❌ You can add up to 10 options.');
+    if (setup.options.length >= 10) return message.reply('❌ You can only add up to 10 options.');
     setup.options.push({ emoji, label });
-    return message.reply(`✅ Added: ${emoji} ${label}`);
+    return message.reply(`✅ Added option: ${emoji} ${label}`);
   }
 
   if (content.startsWith('!ticketviewer')) {
     const match = content.match(/<@&(\d+)>/);
     if (!match) return message.reply('❌ Please mention a valid role.');
     setup.viewerRoleId = match[1];
-    return message.reply('✅ Viewer role set.');
+    return message.reply('✅ Ticket viewer role set.');
   }
 
   if (content.startsWith('!ticketcategory')) {
     const match = content.match(/<#(\d+)>/);
-    if (!match) return message.reply('❌ Please mention a text channel.');
+    if (!match) return message.reply('❌ Please mention a valid text channel.');
     const channel = message.guild.channels.cache.get(match[1]);
-    if (!channel?.parentId) return message.reply('❌ That channel doesn’t belong to a category.');
+    if (!channel || !channel.parentId) return message.reply('❌ Couldn’t find a category for that channel.');
     setup.categoryId = channel.parentId;
-    return message.reply(`✅ Ticket category set to parent of #${channel.name}`);
+    return message.reply(`✅ Ticket category set from parent of #${channel.name}`);
   }
 
   if (content === '!deployticketpanel') {
-    if (!setup.description || setup.options.length === 0 || !setup.viewerRoleId || !setup.categoryId) {
-      return message.reply('❌ Setup incomplete. Make sure description, at least one option, a role, and category are set.');
+    if (!setup.description || !setup.options.length || !setup.viewerRoleId || !setup.categoryId) {
+      return message.reply('❌ Incomplete setup. Please set the message, add options, viewer role, and category first.');
     }
 
     const embed = new EmbedBuilder()
@@ -121,7 +132,7 @@ client.on('messageCreate', async message => {
     return message.reply('✅ Ticket panel deployed.');
   }
 
-  // 🗑️ Close Ticket Channel
+  // 🗑️ Close ticket
   if (content === '!close') {
     if (!message.channel.name.startsWith('ticket-')) {
       return message.reply('❌ This is not a ticket channel.');
@@ -129,9 +140,35 @@ client.on('messageCreate', async message => {
     await message.reply('🗑️ Closing this ticket...');
     setTimeout(() => message.channel.delete(), 3000);
   }
+
+  // ✉️ Message Forwarding
+  if (content.startsWith('!msg ')) {
+    const msg = message.content.slice(5).trim();
+    if (msg) {
+      await message.channel.send(msg);
+      await message.delete().catch(() => {});
+    }
+  }
+
+  // 📩 DM Role
+  if (content.startsWith('!dm ')) {
+    const args = message.content.slice(4).trim().split(' ');
+    const roleMention = args.shift();
+    const msg = args.join(' ');
+    const roleId = roleMention.match(/^<@&(\d+)>$/)?.[1];
+    if (!roleId) return message.reply('❌ Please mention a role.');
+    const role = message.guild.roles.cache.get(roleId);
+    if (!role) return message.reply('❌ Role not found.');
+    let sent = 0;
+    role.members.forEach(member => {
+      member.send(msg).then(() => sent++).catch(() => {});
+    });
+    message.delete().catch(() => {});
+    console.log(`✅ Sent message to ${sent} member(s)`);
+  }
 });
 
-// 🎟️ Handle Ticket Button Interactions
+// 🎟️ Handle button click
 client.on('interactionCreate', async interaction => {
   if (!interaction.isButton() || !interaction.guild) return;
 
@@ -143,15 +180,14 @@ client.on('interactionCreate', async interaction => {
   const optionIndex = parseInt(interaction.customId.split('_')[1]);
   const option = setup.options[optionIndex];
   const user = interaction.user;
-  const guild = interaction.guild;
   const channelName = `ticket-${user.username.toLowerCase().replace(/\s+/g, '-')}`;
 
-  const channel = await guild.channels.create({
+  const channel = await interaction.guild.channels.create({
     name: channelName,
-    type: 0, // Text
+    type: 0,
     parent: setup.categoryId,
     permissionOverwrites: [
-      { id: guild.roles.everyone, deny: [PermissionsBitField.Flags.ViewChannel] },
+      { id: interaction.guild.roles.everyone, deny: [PermissionsBitField.Flags.ViewChannel] },
       { id: user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
       { id: setup.viewerRoleId, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] }
     ]
@@ -166,7 +202,7 @@ client.on('interactionCreate', async interaction => {
   });
 
   await interaction.reply({
-    content: `✅ Ticket created: ${channel}`,
+    content: `✅ Your ticket has been created: ${channel}`,
     ephemeral: true
   });
 });
