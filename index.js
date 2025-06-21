@@ -65,7 +65,7 @@ client.on('messageCreate', async message => {
   const setup = ticketSetup.get(guildId);
 
   if (content === '!help') {
-    const helpText = `📘 **Bot Command Overview**
+    return message.channel.send(`📘 **Bot Command Overview**
 
 🎟️ **Ticket System**
 📝 \`!ticket <message>\` — Set ticket message  
@@ -73,7 +73,6 @@ client.on('messageCreate', async message => {
 🎭 \`!ticketviewer @role\` — Set viewer role  
 📂 \`!ticketcategory #channel\` — Use channel's category for tickets  
 🚀 \`!deployticketpanel\` — Deploy dropdown ticket menu  
-🗑️ Button — Close ticket & receive transcript
 
 🎮 **Mini-Games**
 🎯 \`!guess <number>\` — Guess a number  
@@ -83,10 +82,7 @@ client.on('messageCreate', async message => {
 
 📬 **Messaging Tools**
 💬 \`!msg <message>\` — Bot says a message  
-📨 \`!dm @role <message>\` — DM a role
-
-ℹ️ \`!help\` — Show this guide`;
-    return message.channel.send(helpText);
+📨 \`!dm @role <message>\` — DM a role`);
   }
 
   if (content.startsWith('!ticket ')) {
@@ -147,6 +143,7 @@ client.on('messageCreate', async message => {
       );
 
     const row = new ActionRowBuilder().addComponents(menu);
+
     const panelMessage = await message.channel.send({ embeds: [embed], components: [row] });
 
     const fetched = await message.channel.messages.fetch({ limit: 100 });
@@ -176,8 +173,7 @@ client.on('messageCreate', async message => {
     message.delete().catch(() => {});
     console.log(`✅ DMs sent: ${sent}`);
   }
-
-  if (content.startsWith('!guess ')) {
+});  if (content.startsWith('!guess ')) {
     const guess = parseInt(content.split(' ')[1]);
     if (isNaN(guess)) return message.reply('❓ Enter a number.');
     if (guess === games.guessNumber) {
@@ -220,9 +216,9 @@ client.on('messageCreate', async message => {
     message.channel.send(`🔤 Unscramble this: **${scramble(word)}**`);
   }
 
-if (
-  games.scrambledWord && 
-  typeof content === 'string' && 
+ if (
+  games.scrambledWord &&
+  typeof content === 'string' &&
   content.toLowerCase() === games.scrambledWord.toLowerCase()
 ) {
   try {
@@ -342,10 +338,10 @@ client.on('interactionCreate', async interaction => {
 
     setTimeout(() => channel.delete().catch(() => {}), 3000);
   }
-}); // 👈 This closes client.on('interactionCreate', ...)
+});
 
 process.on('unhandledRejection', err => {
   console.error('Unhandled Rejection:', err);
 });
 
-client.login(process.env.DISCORD_TOKEN);})
+client.login(process.env.DISCORD_TOKEN);
