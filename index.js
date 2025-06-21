@@ -220,13 +220,10 @@ client.on('messageCreate', async message => {
     message.channel.send(`🔤 Unscramble this: **${scramble(word)}**`);
   }
 
-  if (games.scrambledWord && content.toLowerCase() === games.scrambledWord.toLowerCase()) {
+if (games.scrambledWord && content.toLowerCase() === games.scrambledWord.toLowerCase()) {
   message.reply(`✅ Well done! The word was **${games.scrambledWord}**`);
   games.scrambledWord = '';
 }
-  }
-});
-
 client.on('interactionCreate', async interaction => {
   if (!interaction.guild) return;
   const setup = ticketSetup.get(interaction.guild.id);
