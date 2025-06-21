@@ -1,6 +1,15 @@
 require('dotenv').config();
 const express = require('express');
-const { Client, GatewayIntentBits, Partials } = require('discord.js');
+const {
+  Client,
+  GatewayIntentBits,
+  Partials,
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  PermissionsBitField
+} = require('discord.js');
 
 const app = express();
 app.get('/', (req, res) => res.send('Bot is alive!'));
@@ -11,151 +20,156 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.DirectMessages
+    GatewayIntentBits.GuildMembers
   ],
   partials: [Partials.Channel]
 });
 
-const games = {
-  guessNumber: Math.floor(Math.random() * 100) + 1,
-  scrambledWord: '',
-  trivia: null
-};
-
-const triviaQuestions = [
-  { question: "What is the capital of France?", answer: "paris" },
-  { question: "2 + 2 * 2 = ?", answer: "6" },
-  { question: "Which planet is known as the Red Planet?", answer: "mars" }
-];
-
-const words = ['banana', 'elephant', 'discord', 'javascript', 'pirate'];
-
-function scramble(word) {
-  return word.split('').sort(() => 0.5 - Math.random()).join('');
-}
+const ticketSetup = new Map(); // Stores setup data per guild
 
 client.once('ready', () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
 });
 
 client.on('messageCreate', async message => {
-  if (message.author.bot) return;
+  if (message.author.bot || !message.guild) return;
+  const content = message.content.trim();
+  const guildId = message.guild.id;
 
-  const content = message.content.toLowerCase();
+  if (!ticketSetup.has(guildId)) {
+    ticketSetup.set(guildId, {
+      description: '',
+      options: [],
+      viewerRoleId: null,
+      categoryId: null
+    });
+  }
 
-  // !help
+  const setup = ticketSetup.get(guildId);
+
   if (content === '!help') {
     const helpText = `
-**Available Commands**
-\`!msg <message>\` - Sends a message in the channel.
-\`!dm <@role> <message>\` - Sends a DM to each member in a role.
-\`!guess <number>\` - Guess a number between 1–100.
-\`!rps <rock|paper|scissors>\` - Rock-Paper-Scissors vs the bot.
-\`!scramble\` - Unscramble the random word.
-\`!trivia\` - Answer a trivia question.
+**🎟️ Ticket Commands**
+\`!ticket <message>\` — Set the ticket embed description.
+\`!option <emoji> <label>\` — Add a ticket button.
+\`!ticketviewer @role\` — Set role that can view ticket channels.
+\`!ticketcategory #category\` — Set the category for ticket channels.
+\`!deployticketpanel\` — Post the ticket panel.
+\`!close\` — Close (delete) the current ticket channel.
     `;
     return message.channel.send(helpText);
   }
 
-  // !msg
-  if (content.startsWith('!msg ')) {
-    const msg = message.content.slice(5).trim();
-    if (msg) {
-      await message.channel.send(msg);
-      await message.delete().catch(() => {});
-    }
+  if (content.startsWith('!ticket ')) {
+    setup.description = content.slice(8).trim();
+    return message.reply('✅ Ticket message set.');
   }
 
-  // !dm
-  if (content.startsWith('!dm ')) {
-    const args = message.content.slice(4).trim().split(' ');
-    const roleMention = args.shift();
-    const msg = args.join(' ');
+  if (content.startsWith('!option ')) {
+    const args = content.slice(8).trim().split(' ');
+    const emoji = args.shift();
+    const label = args.join(' ');
+    if (!emoji || !label) return message.reply('Usage: `!option <emoji> <label>`');
+    if (setup.options.length >= 10) return message.reply('❌ Max 10 options allowed.');
+    setup.options.push({ emoji, label });
+    return message.reply(`✅ Added option: ${emoji} ${label}`);
+  }
 
-    const roleId = roleMention.match(/^<@&(\d+)>$/)?.[1];
-    if (!roleId) return message.reply('Please mention a valid role.');
+  if (content.startsWith('!ticketviewer')) {
+    const match = content.match(/<@&(\d+)>/);
+    if (!match) return message.reply('❌ Mention a valid role.');
+    setup.viewerRoleId = match[1];
+    return message.reply('✅ Ticket viewer role set.');
+  }
 
-    const role = message.guild.roles.cache.get(roleId);
-    if (!role) return message.reply('Role not found.');
+  if (content.startsWith('!ticketcategory')) {
+    const match = content.match(/<#(\d+)>/);
+    if (!match) return message.reply('❌ Mention a valid category.');
+    setup.categoryId = match[1];
+    return message.reply('✅ Ticket category set.');
+  }
 
-    const members = role.members;
-    if (!members.size) return message.reply('No members in this role.');
+  if (content === '!deployticketpanel') {
+    if (!setup.description || setup.options.length === 0 || !setup.viewerRoleId || !setup.categoryId) {
+      return message.reply('❌ Incomplete setup. Set description, at least one option, viewer role, and category.');
+    }
 
-    let sent = 0;
-    members.forEach(member => {
-      member.send(msg)
-        .then(() => sent++)
-        .catch(() => console.log(`❌ Couldn't DM ${member.user.tag}`));
+    const embed = new EmbedBuilder()
+      .setTitle('📩 Open a Ticket')
+      .setDescription(setup.description)
+      .setColor('Blue');
+
+    const row = new ActionRowBuilder();
+    setup.options.forEach((opt, i) => {
+      row.addComponents(
+        new ButtonBuilder()
+          .setCustomId(`ticket_${i}`)
+          .setLabel(opt.label)
+          .setEmoji(opt.emoji)
+          .setStyle(ButtonStyle.Primary)
+      );
     });
 
-    message.delete().catch(() => {});
-    console.log(`✅ Sent message to ${sent} member(s)`);
+    await message.channel.send({ embeds: [embed], components: [row] });
+    return message.reply('✅ Ticket panel deployed.');
   }
 
-  // !guess
-  if (content.startsWith('!guess ')) {
-    const num = parseInt(content.split(' ')[1]);
-    if (isNaN(num)) return message.reply('Please enter a valid number.');
-
-    if (num === games.guessNumber) {
-      message.reply(`🎉 Correct! The number was ${games.guessNumber}.`);
-      games.guessNumber = Math.floor(Math.random() * 100) + 1;
-    } else if (num < games.guessNumber) {
-      message.reply('🔼 Too low!');
-    } else {
-      message.reply('🔽 Too high!');
+  if (content === '!close') {
+    if (!message.channel.name.startsWith('ticket-')) {
+      return message.reply('❌ This is not a ticket channel.');
     }
-  }
-
-  // !rps
-  if (content.startsWith('!rps ')) {
-    const player = content.split(' ')[1];
-    const choices = ['rock', 'paper', 'scissors'];
-    const bot = choices[Math.floor(Math.random() * 3)];
-
-    if (!choices.includes(player)) {
-      return message.reply('Please pick rock, paper, or scissors.');
-    }
-
-    let result = '';
-    if (player === bot) result = 'It’s a draw!';
-    else if (
-      (player === 'rock' && bot === 'scissors') ||
-      (player === 'paper' && bot === 'rock') ||
-      (player === 'scissors' && bot === 'paper')
-    ) result = 'You win!';
-    else result = 'I win!';
-
-    message.reply(`You chose **${player}**, I chose **${bot}**. ${result}`);
-  }
-
-  // !scramble
-  if (content === '!scramble') {
-    const word = words[Math.floor(Math.random() * words.length)];
-    games.scrambledWord = word;
-    message.channel.send(`🔤 Unscramble this word: **${scramble(word)}**`);
-  }
-
-  if (games.scrambledWord && content === games.scrambledWord) {
-    message.reply(`✅ Correct! The word was **${games.scrambledWord}**`);
-    games.scrambledWord = '';
-  }
-
-  // !trivia
-  if (content === '!trivia') {
-    games.trivia = triviaQuestions[Math.floor(Math.random() * triviaQuestions.length)];
-    message.channel.send(`❓ ${games.trivia.question}`);
-  }
-
-  if (games.trivia && content === games.trivia.answer.toLowerCase()) {
-    message.reply(`🧠 Correct!`);
-    games.trivia = null;
+    await message.reply('🗑️ Closing this ticket...');
+    setTimeout(() => message.channel.delete(), 3000);
   }
 });
 
-process.on('unhandledRejection', error => {
-  console.error('Unhandled promise rejection:', error);
+client.on('interactionCreate', async interaction => {
+  if (!interaction.isButton()) return;
+  if (!interaction.guild) return;
+
+  const setup = ticketSetup.get(interaction.guild.id);
+  if (!setup || !setup.options.length || !setup.categoryId || !setup.viewerRoleId) {
+    return interaction.reply({ content: '❌ Ticket system not fully configured on this server.', ephemeral: true });
+  }
+
+  const optionIndex = parseInt(interaction.customId.split('_')[1]);
+  const option = setup.options[optionIndex];
+  const user = interaction.user;
+  const channelName = `ticket-${user.username.toLowerCase()}`.replace(/\s+/g, '-');
+
+  const channel = await interaction.guild.channels.create({
+    name: channelName,
+    type: 0, // Text channel
+    parent: setup.categoryId,
+    permissionOverwrites: [
+      {
+        id: interaction.guild.roles.everyone,
+        deny: [PermissionsBitField.Flags.ViewChannel]
+      },
+      {
+        id: user.id,
+        allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages]
+      },
+      {
+        id: setup.viewerRoleId,
+        allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages]
+      }
+    ]
+  });
+
+  await channel.send({
+    content: `🎫 <@${user.id}> opened a ticket! <@&${setup.viewerRoleId}>`,
+    allowedMentions: {
+      users: [user.id],
+      roles: [setup.viewerRoleId]
+    }
+  });
+
+  await interaction.reply({
+    content: `✅ Ticket created: ${channel}`,
+    ephemeral: true
+  });
 });
 
+process.on('unhandledRejection', console.error);
 client.login(process.env.DISCORD_TOKEN);
