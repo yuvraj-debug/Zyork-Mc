@@ -12,7 +12,7 @@ const {
 } = require('discord.js');
 
 const app = express();
-app.get('/', (req, res) => res.send('Bot is alive!'));
+app.get('/', (_, res) => res.send('Bot is alive!'));
 app.listen(3000, () => console.log('✅ Keep-alive server running'));
 
 const client = new Client({
@@ -62,30 +62,30 @@ client.on('messageCreate', async message => {
   const setup = ticketSetup.get(guildId);
 
   if (content === '!help') {
-    return message.channel.send(`
-📘 **Bot Command Overview**
+    return message.channel.send(
+`📘 Bot Command Overview
 
-🎟️ **Ticket System**
-\`!ticket <message>\` — Set the description that appears in the ticket panel.
-\`!option <emoji> <label>\` — Add a ticket button (max 10).
-\`!ticketviewer @role\` — Assign support staff role.
-\`!ticketcategory #channel\` — Set the category for ticket channels.
-\`!deployticketpanel\` — Deploy the ticket panel with buttons.
-\`!close\` — Close the current ticket channel.
+🎟️ Ticket System
+!ticket <message> — Set the description that appears in the ticket panel.
+!option <emoji> <label> — Add a ticket button (max 10).
+!ticketviewer @role — Assign support staff role.
+!ticketcategory #channel — Set the category for ticket channels.
+!deployticketpanel — Deploy the ticket panel with buttons.
+!close — Close the current ticket channel.
 
-🎮 **Mini-Games**
-\`!guess <number>\` — Guess a number between 1 and 100.
-\`!trivia\` — Answer a random trivia question.
-\`!scramble\` — Unscramble a mixed-up word.
-\`!rps <rock|paper|scissors>\` — Rock-Paper-Scissors game.
+🎮 Mini-Games
+!guess <number> — Guess a number between 1 and 100.
+!trivia — Answer a random trivia question.
+!scramble — Unscramble a mixed-up word.
+!rps <rock|paper|scissors> — Rock-Paper-Scissors game.
 
-📬 **Messaging Tools**
-\`!msg <message>\` — Sends a message and deletes the original command.
-\`!dm @role <message>\` — DM everyone with the mentioned role.
+📬 Messaging Tools
+!msg <message> — Sends a message and deletes the original command.
+!dm @role <message> — DM everyone with the mentioned role.
 
-ℹ️ **Utilities**
-\`!help\` — Display this help message.
-    `);
+ℹ️ Utilities
+!help — Display this help message.`
+    );
   }
 
   if (content.startsWith('!ticket ')) {
@@ -228,8 +228,7 @@ client.on('interactionCreate', async interaction => {
   if (!interaction.isButton() || !interaction.guild) return;
 
   const setup = ticketSetup.get(interaction.guild.id);
-  if (!setup || !setup.options.length || !setup.categoryId || !setup.viewerRoleId)
-  {
+  if (!setup || !setup.options.length || !setup.categoryId || !setup.viewerRoleId) {
     return interaction.reply({
       content: '❌ Ticket system is not fully configured on this server.',
       ephemeral: true
@@ -237,12 +236,12 @@ client.on('interactionCreate', async interaction => {
   }
 
   const optionIndex = parseInt(interaction.customId.split('_')[1]);
-  const option = setup.options[optionIndex];
+   const option = setup.options[optionIndex];
   const user = interaction.user;
-  const channelName = `ticket-${user.username.toLowerCase().replace(/\s+/g, '-')}-${Date.now().toString().slice(-4)}`;
+  const ticketName = `ticket-${user.username.toLowerCase().replace(/\s+/g, '-')}-${Date.now().toString().slice(-4)}`;
 
-  const existing = interaction.guild.channels.cache.find(c =>
-    c.name.startsWith(`ticket-${user.username.toLowerCase()}`)
+  const existing = interaction.guild.channels.cache.find(
+    c => c.name.startsWith(`ticket-${user.username.toLowerCase()}`)
   );
 
   if (existing) {
@@ -253,7 +252,7 @@ client.on('interactionCreate', async interaction => {
   }
 
   const ticketChannel = await interaction.guild.channels.create({
-    name: channelName,
+    name: ticketName,
     type: 0, // GuildText
     parent: setup.categoryId,
     permissionOverwrites: [
@@ -281,11 +280,8 @@ client.on('interactionCreate', async interaction => {
   });
 
   await ticketChannel.send({
-    content: `🎫 <@${user.id}> opened a ticket for **${option.label}**. <@&${setup.viewerRoleId}>`,
-    allowedMentions: {
-      users: [user.id],
-      roles: [setup.viewerRoleId]
-    }
+    content: `🎫 <@${user.id}> created a ticket for **${option.label}**. <@&${setup.viewerRoleId}>`,
+    allowedMentions: { users: [user.id], roles: [setup.viewerRoleId] }
   });
 
   await interaction.reply({
@@ -294,8 +290,8 @@ client.on('interactionCreate', async interaction => {
   });
 });
 
-process.on('unhandledRejection', (err) => {
-  console.error('Unhandled promise rejection:', err);
+process.on('unhandledRejection', err => {
+  console.error('Unhandled Rejection:', err);
 });
 
 client.login(process.env.DISCORD_TOKEN);
