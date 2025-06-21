@@ -6,8 +6,7 @@ const {
   Partials,
   EmbedBuilder,
   ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
+  StringSelectMenuBuilder,
   PermissionsBitField
 } = require('discord.js');
 
@@ -67,10 +66,10 @@ client.on('messageCreate', async message => {
 
 🎟️ **Ticket System**
 📝 \`!ticket <message>\` — Set ticket message  
-➕ \`!option <emoji> <label>\` — Add a button  
+➕ \`!option <emoji> <label>\` — Add a category  
 🎭 \`!ticketviewer @role\` — Set viewer role  
 📂 \`!ticketcategory #channel\` — Set category  
-🚀 \`!deployticketpanel\` — Deploy ticket panel  
+🚀 \`!deployticketpanel\` — Deploy dropdown menu  
 🗑️ \`!close\` — Close ticket
 
 🎮 **Mini-Games**
@@ -89,11 +88,7 @@ client.on('messageCreate', async message => {
   if (content.startsWith('!ticket ')) {
     setup.description = content.slice(8).trim();
     const attachment = message.attachments.first();
-    if (attachment && /\.(png|jpe?g|gif|webp)$/i.test(attachment.name)) {
-      setup.footerImage = attachment.url;
-    } else {
-      setup.footerImage = null;
-    }
+    setup.footerImage = attachment?.url ?? null;
     return message.reply('✅ Ticket message set.');
   }
 
@@ -102,7 +97,7 @@ client.on('messageCreate', async message => {
     const emoji = args.shift();
     const label = args.join(' ');
     if (!emoji || !label) return message.reply('Usage: `!option <emoji> <label>`');
-    if (setup.options.length >= 10) return message.reply('❌ Max 10 options allowed.');
+    if (setup.options.length >= 25) return message.reply('❌ Max 25 options allowed.');
     setup.options.push({ emoji, label });
     return message.reply(`✅ Added: ${emoji} ${label}`);
   }
@@ -140,19 +135,20 @@ client.on('messageCreate', async message => {
       embed.setImage(setup.footerImage);
     }
 
-    const row = new ActionRowBuilder();
-    setup.options.forEach((opt, i) => {
-      row.addComponents(
-        new ButtonBuilder()
-          .setCustomId(`ticket_${i}`)
-          .setLabel(opt.label)
-          .setEmoji(opt.emoji)
-          .setStyle(ButtonStyle.Primary)
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId('ticket_select')
+      .setPlaceholder('Select a ticket category')
+      .addOptions(
+        setup.options.map((opt, i) => ({
+          label: opt.label,
+          value: `ticket_${i}`,
+          emoji: opt.emoji
+        }))
       );
-    });
 
+    const row = new ActionRowBuilder().addComponents(menu);
     await message.channel.send({ embeds: [embed], components: [row] });
-    return message.reply('✅ Ticket panel deployed.');
+    return message.reply('✅ Dropdown ticket panel deployed.');
   }
 
   if (content === '!close') {
@@ -213,11 +209,12 @@ client.on('messageCreate', async message => {
     const options = ['rock', 'paper', 'scissors'];
     if (!options.includes(player)) return message.reply('🪨 📄 ✂️ Choose rock, paper, or scissors.');
     const bot = options[Math.floor(Math.random() * 3)];
-    const result = player === bot
-      ? 'Draw!'
-      : (player === 'rock' && bot === 'scissors') ||
-        (player === 'paper' && bot === 'rock') ||
-        (player === 'scissors' && bot === 'paper')
+    const result =
+      player === bot
+        ? 'Draw!'
+        : (player === 'rock' && bot === 'scissors') ||
+          (player === 'paper' && bot === 'rock') ||
+          (player === 'scissors' && bot === 'paper')
         ? 'You win!' : 'I win!';
     message.reply(`You chose **${player}**, I chose **${bot}** → ${result}`);
   }
@@ -230,74 +227,77 @@ client.on('messageCreate', async message => {
 
   if (games.scrambledWord && content.toLowerCase() === games.scrambledWord) {
     message.reply(`✅ Well done! The word was **${games.scrambledWord}**`);
-    games.scrambledWord = '';
+    gamesscrambledWord = '';
   }
 });
+
 client.on('interactionCreate', async interaction => {
-  // This handles only button interactions for the ticket system
-  if (!interaction.isButton() || !interaction.guild) return;
+  if (!interaction.guild) return;
 
   const setup = ticketSetup.get(interaction.guild.id);
-  if (!setup || !setup.options.length || !setup.categoryId || !setup.viewerRoleId) {
+  if (!setup || !setup.options.length || !setup.viewerRoleId || !setup.categoryId) {
     return interaction.reply({
       content: '❌ Ticket system is not fully configured on this server.',
       ephemeral: true
     });
   }
 
-  const optionIndex = parseInt(interaction.customId.split('_')[1]);
-  const option = setup.options[optionIndex];
-  const user = interaction.user;
-  const ticketName = `ticket-${user.username.toLowerCase().replace(/\s+/g, '-')}-${Date.now().toString().slice(-4)}`;
+  if (interaction.isStringSelectMenu() && interaction.customId === 'ticket_select') {
+    const index = parseInt(interaction.values[0].split('_')[1]);
+    const option = setup.options[index];
+    const user = interaction.user;
 
-  const existing = interaction.guild.channels.cache.find(c =>
-    c.name.startsWith(`ticket-${user.username.toLowerCase()}`)
-  );
+    const existing = interaction.guild.channels.cache.find(c =>
+      c.name.startsWith(`ticket-${user.username.toLowerCase()}`)
+    );
 
-  if (existing) {
-    return interaction.reply({
-      content: `⚠️ You already have an open ticket: <#${existing.id}>`,
+    if (existing) {
+      return interaction.reply({
+        content: `⚠️ You already have an open ticket: <#${existing.id}>`,
+        ephemeral: true
+      });
+    }
+
+    const ticketName = `ticket-${user.username.toLowerCase().replace(/\s+/g, '-')}-${Date.now().toString().slice(-4)}`;
+
+    const ticketChannel = await interaction.guild.channels.create({
+      name: ticketName,
+      type: 0,
+      parent: setup.categoryId,
+      permissionOverwrites: [
+        {
+          id: interaction.guild.roles.everyone,
+          deny: [PermissionsBitField.Flags.ViewChannel]
+        },
+        {
+          id: user.id,
+          allow: [
+            PermissionsBitField.Flags.ViewChannel,
+            PermissionsBitField.Flags.SendMessages,
+            PermissionsBitField.Flags.ReadMessageHistory
+          ]
+        },
+        {
+          id: setup.viewerRoleId,
+          allow: [
+            PermissionsBitField.Flags.ViewChannel,
+            PermissionsBitField.Flags.SendMessages,
+            PermissionsBitField.Flags.ReadMessageHistory
+          ]
+        }
+      ]
+    });
+
+    await ticketChannel.send({
+      content: `🎫 <@${user.id}> created a ticket for **${option.label}**. <@&${setup.viewerRoleId}>`,
+      allowedMentions: { users: [user.id], roles: [setup.viewerRoleId] }
+    });
+
+    await interaction.reply({
+      content: `✅ Ticket created: <#${ticketChannel.id}>`,
       ephemeral: true
     });
   }
-
-  const ticketChannel = await interaction.guild.channels.create({
-    name: ticketName,
-    type: 0, // GuildText
-    parent: setup.categoryId,
-    permissionOverwrites: [
-      {
-        id: interaction.guild.roles.everyone,
-        deny: [PermissionsBitField.Flags.ViewChannel]
-      },
-      {
-        id: user.id,
-        allow: [
-          PermissionsBitField.Flags.ViewChannel,
-          PermissionsBitField.Flags.SendMessages,
-          PermissionsBitField.Flags.ReadMessageHistory
-        ]
-      },
-      {
-        id: setup.viewerRoleId,
-        allow: [
-          PermissionsBitField.Flags.ViewChannel,
-          PermissionsBitField.Flags.SendMessages,
-          PermissionsBitField.Flags.ReadMessageHistory
-        ]
-      }
-    ]
-  });
-
-  await ticketChannel.send({
-    content: `🎫 <@${user.id}> created a ticket for **${option.label}**. <@&${setup.viewerRoleId}>`,
-    allowedMentions: { users: [user.id], roles: [setup.viewerRoleId] }
-  });
-
-  await interaction.reply({
-    content: `✅ Ticket created: <#${ticketChannel.id}>`,
-    ephemeral: true
-  });
 });
 
 process.on('unhandledRejection', err => {
