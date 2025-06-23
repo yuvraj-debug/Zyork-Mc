@@ -13,12 +13,10 @@ const {
   AttachmentBuilder
 } = require('discord.js');
 
-// Keep-alive server
 const app = express();
 app.get('/', (_, res) => res.send('Bot is alive!'));
 app.listen(3000, () => console.log('✅ Keep-alive server running'));
 
-// Discord client setup
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -30,10 +28,8 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
-// Ticket system storage
 const ticketSetup = new Map();
 
-// Game data
 const games = {
   guessNumber: Math.floor(Math.random() * 100) + 1,
   scrambleWords: ['banana', 'elephant', 'discord', 'javascript', 'pirate']
@@ -45,7 +41,6 @@ const triviaQuestions = [
 ];
 const scramble = word => word.split('').sort(() => 0.5 - Math.random()).join('');
 
-// Per-user state tracking
 const userStates = new Map();
 
 client.once('ready', () => console.log(`🤖 Logged in as ${client.user.tag}`));
@@ -79,19 +74,32 @@ client.on('messageCreate', async message => {
 🎟️ **Ticket System**
 📝 \`!ticket <message>\` — Set ticket message  
 ➕ \`!option <emoji> <label>\` — Add a category  
+♻️ \`!resetticket\` — Reset ticket setup  
 🎭 \`!ticketviewer @role\` — Set viewer role  
-📂 \`!ticketcategory #channel\` — Use channel's category for tickets  
-🚀 \`!deployticketpanel\` — Deploy dropdown ticket menu  
+📂 \`!ticketcategory #channel\` — Set ticket category  
+🚀 \`!deployticketpanel\` — Deploy panel
 
 🎮 **Mini‑Games**
 🎯 \`!guess <number>\` — Guess a number  
-🧠 \`!trivia\` — Trivia question  
-🔤 \`!scramble\` — Unscramble word  
-📄 \`!rps <rock|paper|scissors>\` — Rock paper scissors  
+🧠 \`!trivia\` — Trivia  
+🔤 \`!scramble\` — Unscramble  
+📄 \`!rps <rock|paper|scissors>\` — RPS game
 
-📬 **Messaging Tools**
-💬 \`!msg <message>\` — Bot says a message  
-📨 \`!dm @role <message>\` — DM a role`);
+📬 **Messaging**
+💬 \`!msg <message>\` — Bot sends a message  
+📨 \`!dm @role <message>\` — DM all users with role`);
+  }
+
+  // === !resetticket
+  if (lc === '!resetticket') {
+    ticketSetup.set(guildId, {
+      description: '',
+      options: [],
+      viewerRoleId: null,
+      categoryId: null,
+      footerImage: null
+    });
+    return message.reply('♻️ Ticket setup has been reset.');
   }
 
   // === !ticket
@@ -197,89 +205,11 @@ client.on('messageCreate', async message => {
     console.log(`✅ DMs sent: ${sent}`);
     return;
   }
-
-  // === !guess <number>
-  if (lc.startsWith('!guess ')) {
-    const num = parseInt(raw.split(' ')[1]);
-    if (isNaN(num)) return message.reply('❓ Enter a valid number.');
-    state.guess = { active: true, answered: false, answer: games.guessNumber };
-
-    if (num === games.guessNumber) {
-      message.reply(`🎉 Correct! It was ${games.guessNumber}.`);
-      games.guessNumber = Math.floor(Math.random() * 100) + 1;
-      state.guess = null;
-    } else {
-      message.reply(num < games.guessNumber ? '🔼 Too low!' : '🔽 Too high!');
-      state.guess.answered = true;
-    }
-    return;
-  } else if (state.guess?.active && !state.guess.answered) {
-    const num = parseInt(raw);
-    if (!isNaN(num) && num !== state.guess.answer) {
-      message.reply(num < state.guess.answer ? '🔼 Too low!' : '🔽 Too high!');
-      state.guess.answered = true;
-    }
-    return;
-  }
-
-  // === !trivia
-  if (lc === '!trivia') {
-    const q = triviaQuestions[Math.floor(Math.random() * triviaQuestions.length)];
-    state.trivia = { active: true, answered: false, answer: q.answer };
-    message.channel.send(`❓ ${q.question}`);
-    return;
-  } else if (state.trivia?.active) {
-    if (content.toLowerCase() === state.trivia.answer) {
-      message.reply('✅ Correct!');
-      state.trivia = null;
-    } else if (!state.trivia.answered) {
-      message.reply('❌ Wrong answer, try again!');
-      state.trivia.answered = true;
-    }
-    return;
-  }
-
-  // === !scramble
-  if (lc === '!scramble') {
-    const word = games.scrambleWords[Math.floor(Math.random() * games.scrambleWords.length)];
-    state.scramble = { active: true, answered: false, answer: word };
-    message.channel.send(`🔤 Unscramble this: **${scramble(word)}**`);
-    return;
-  } else if (state.scramble?.active) {
-    if (content.toLowerCase() === state.scramble.answer) {
-      message.reply(`✅ Well done! The word was **${state.scramble.answer}**`);
-      state.scramble = null;
-    } else if (!state.scramble.answered) {
-      message.reply('❌ Nope, that’s not it!');
-      state.scramble.answered = true;
-    }
-    return;
-  }
-
-  // === !rps <choice>
-  if (lc.startsWith('!rps ')) {
-    const player = raw.split(' ')[1]?.toLowerCase();
-    const opts = ['rock', 'paper', 'scissors'];
-    if (!opts.includes(player)) return message.reply('🪨 📄 ✂️ Choose rock, paper, or scissors.');
-    const botPick = opts[Math.floor(Math.random() * opts.length)];
-    const result =
-      player === botPick
-        ? 'Draw!'
-        : (player === 'rock' && botPick === 'scissors')
-        || (player === 'paper' && botPick === 'rock')
-        || (player === 'scissors' && botPick === 'paper')
-        ? 'You win!'
-        : 'I win!';
-    message.reply(`You chose **${player}**, I chose **${botPick}** → ${result}`);
-  }
 });
 
 client.on('interactionCreate', async interaction => {
-  if (!interaction.guild) return;
-  const setup = ticketSetup.get(interaction.guild.id);
-  if (!setup?.options.length || !setup.viewerRoleId || !setup.categoryId) {
-    return interaction.reply({ content: '❌ Ticket system not fully configured.', ephemeral: true });
-  }
+  const setup = ticketSetup.get(interaction.guild?.id);
+  if (!setup?.options.length || !setup.viewerRoleId || !setup.categoryId) return;
 
   if (interaction.isStringSelectMenu() && interaction.customId === 'ticket_select') {
     const idx = parseInt(interaction.values[0].split('_')[1]);
@@ -296,7 +226,8 @@ client.on('interactionCreate', async interaction => {
     const name = `ticket-${user.username.toLowerCase().replace(/\s+/g, '-')}-${Date.now().toString().slice(-4)}`;
     const ch = await interaction.guild.channels.create({
       name,
-      type: 0, parent: setup.categoryId,
+      type: 0,
+      parent: setup.categoryId,
       permissionOverwrites: [
         { id: interaction.guild.roles.everyone, deny: [PermissionsBitField.Flags.ViewChannel] },
         { id: user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory] },
