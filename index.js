@@ -89,8 +89,8 @@ client.on('messageCreate', async message => {
   if (!userStates.has(uid)) userStates.set(uid, {});
   const state = userStates.get(uid);
 
-  if (lc === '!help') {
-    return message.channel.send(`📘 **Bot Commands**
+ if (lc === '!help') {
+  return message.channel.send(`📘 **Bot Commands**
 
 🎮 **Mini‑Games** (Everyone)
 \`!guess <number>\` — Guess the number  
@@ -98,11 +98,28 @@ client.on('messageCreate', async message => {
 \`!scramble\` — Unscramble word  
 \`!rps <rock|paper|scissors>\` — Rock Paper Scissors
 
-🔧 **Admin Only**
-\`!ticket <msg>\`, \`!option <emoji> <label>\`, \`!resetticket\`, \`!ticketviewer @role\`, \`!ticketcategory #channel\`, \`!deployticketpanel\`  
-\`!msg <message>\`, \`!dm @role <message>\`  
-\`!addques <q>\`, \`!setoptions Opt|Cooldown,...\`, \`!setchannel #ch\`, \`!deploy\`, \`!reset\``);
-  }
+🛠️ **Admin / Owner Only**
+
+🎟️ **Ticket System**
+\`!ticket <message>\` — Set ticket message  
+\`!option <emoji> <label>\` — Add ticket category  
+\`!resetticket\` — Reset ticket setup  
+\`!ticketviewer @role\` — Set viewer role  
+\`!ticketcategory #channel\` — Set category  
+\`!deployticketpanel\` — Deploy ticket panel
+
+📬 **Messaging**
+\`!msg <message>\` — Bot says a message  
+\`!dm @role <message>\` — DM all users with a role
+
+📝 **Application System**
+\`!addques <question>\` — Add question  
+\`!setoptions Option|Cooldown,...\` — Set options  
+\`!setchannel #channel\` — Set log channel  
+\`!deploy\` — Deploy application menu  
+\`!reset\` — Reset all settings
+`);
+}
 
   // ===== MINI GAMES
   if (lc.startsWith('!guess ')) {
