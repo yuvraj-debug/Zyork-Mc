@@ -14,12 +14,10 @@ const {
   PermissionsBitField
 } = require('discord.js');
 
-// Keep-alive server
 const app = express();
 app.get('/', (_, res) => res.send('Bot is alive!'));
 app.listen(3000, () => console.log('✅ Keep-alive server running'));
 
-// Bot setup
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -31,7 +29,6 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
-// ========== MEMORY STORAGE ==========
 const ticketSetup = {
   description: 'Select a category to open a ticket.',
   options: [],
@@ -40,21 +37,14 @@ const ticketSetup = {
 };
 
 let appQuestions = [];
-let appOptions = []; // { label, value, cooldown }
+let appOptions = [];
 let logChannelId = '';
-const userStates = new Map(); // temporary states
-const userLastApplied = new Map(); // cooldown tracker
+const userStates = new Map();
+const userLastApplied = new Map();
+const openTickets = new Map();
 
-// ========== UTILS ==========
-const scramble = word => word.split('').sort(() => 0.5 - Math.random()).join('');
-const msToDays = ms => Math.ceil(ms / (24 * 60 * 60 * 1000));
+client.once('ready', () => console.log(`🤖 Logged in as ${client.user.tag}`));
 
-// ========== READY ==========
-client.once('ready', () => {
-  console.log(`🤖 Logged in as ${client.user.tag}`);
-});
-
-// ========== COMMAND HANDLER ==========
 client.on('messageCreate', async message => {
   if (message.author.bot) return;
   const content = message.content.trim();
@@ -64,107 +54,18 @@ client.on('messageCreate', async message => {
   if (!userStates.has(uid)) userStates.set(uid, {});
   const state = userStates.get(uid);
 
-  // ========== !help ==========
   if (lc === '!help') {
     const embed = new EmbedBuilder()
       .setTitle('📘 Bot Commands')
       .setColor('Blue')
       .addFields(
         { name: '🎮 Mini‑Games', value: '`!guess <number>` — Guess the number\n`!trivia` — Trivia game\n`!scramble` — Unscramble word' },
-        { name: '📝 Applications', value: '`!addques <question>` — Add question\n`!setoptions Option|Cooldown,...`\n`!setchannel #channel`\n`!deploy` — Deploy app menu\n`!reset` — Reset app data' },
-        { name: '🎟️ Tickets', value: '`!ticket <message>` — Set panel message\n`!option <emoji> <label>` — Add option\n`!ticketviewer @role`\n`!ticketcategory #channel`\n`!deployticketpanel`\n`!resetticket` — Reset ticket setup' }
-      )
-      .setFooter({ text: 'All users can use commands — no admin needed' });
-
+        { name: '📝 Applications', value: '`!addques <question>`\n`!setoptions Option|Cooldown,...`\n`!setchannel #channel`\n`!deploy` — Deploy application menu\n`!reset` — Reset application data' },
+        { name: '🎟️ Tickets', value: '`!ticket <message>`\n`!option <emoji> <label>`\n`!ticketviewer @role`\n`!ticketcategory #channel`\n`!deployticketpanel`\n`!resetticket`' }
+      );
     return message.channel.send({ embeds: [embed] });
   }
 
-  // ========== MINIGAMES ==========
-  if (lc.startsWith('!guess ')) {
-    const guess = parseInt(content.split(' ')[1]);
-    const correct = 42;
-    return message.reply(guess === correct ? '🎉 Correct!' : '❌ Wrong. Try again!');
-  }
-
-  if (lc === '!trivia') {
-    state.triviaAnswer = 'paris';
-    return message.channel.send('🧠 Trivia: What is the capital of France?');
-  }
-  if (state.triviaAnswer && lc === state.triviaAnswer) {
-    state.triviaAnswer = null;
-    return message.reply('✅ Correct!');
-  }
-
-  if (lc === '!scramble') {
-    const word = 'discord';
-    state.scrambleAnswer = word;
-    return message.channel.send(`🔤 Unscramble this: \`${scramble(word)}\``);
-  }
-  if (state.scrambleAnswer && lc === state.scrambleAnswer) {
-    state.scrambleAnswer = null;
-    return message.reply('✅ Correct unscramble!');
-  }
-
-  // ========== TICKETS ==========
-  if (lc.startsWith('!ticket ')) {
-    ticketSetup.description = content.slice(8).trim();
-    return message.reply('✅ Ticket panel description set.');
-  }
-
-  if (lc.startsWith('!option ')) {
-    const parts = content.slice(8).trim().split(' ');
-    const emoji = parts[0];
-    const label = parts.slice(1).join(' ');
-    if (!emoji || !label) return message.reply('❌ Use: `!option <emoji> <label>`');
-    ticketSetup.options.push({ emoji, label });
-    return message.reply(`✅ Added option: ${emoji} ${label}`);
-  }
-
-  if (lc.startsWith('!ticketviewer')) {
-    const roleId = message.mentions.roles.first()?.id;
-    if (!roleId) return message.reply('❌ Mention a valid role.');
-    ticketSetup.viewerRoleId = roleId;
-    return message.reply('✅ Viewer role set.');
-  }
-
-  if (lc.startsWith('!ticketcategory')) {
-    const ch = message.mentions.channels.first();
-    if (!ch?.parentId) return message.reply('❌ Mention a channel in a category.');
-    ticketSetup.categoryId = ch.parentId;
-    return message.reply('✅ Category set.');
-  }
-
-  if (lc === '!resetticket') {
-    ticketSetup.options = [];
-    ticketSetup.viewerRoleId = null;
-    ticketSetup.categoryId = null;
-    return message.reply('🔄 Ticket setup reset.');
-  }
-
-  if (lc === '!deployticketpanel') {
-    if (!ticketSetup.description || !ticketSetup.options.length) {
-      return message.reply('❌ Setup incomplete.');
-    }
-
-    const embed = new EmbedBuilder()
-      .setTitle('📩 Open a Ticket')
-      .setDescription(ticketSetup.description)
-      .setColor('Blue');
-
-    const menu = new StringSelectMenuBuilder()
-      .setCustomId('ticket_select')
-      .setPlaceholder('Choose a category')
-      .addOptions(ticketSetup.options.map((opt, i) => ({
-        label: opt.label,
-        value: `ticket_${i}`,
-        emoji: opt.emoji
-      })));
-
-    const row = new ActionRowBuilder().addComponents(menu);
-    return message.channel.send({ embeds: [embed], components: [row] });
-  }
-
-  // ========== APPLICATION SYSTEM ==========
   if (lc.startsWith('!addques ')) {
     const q = content.slice(9).trim();
     appQuestions.push(q);
@@ -203,27 +104,57 @@ client.on('messageCreate', async message => {
     const row = new ActionRowBuilder().addComponents(menu);
     return message.channel.send({ content: '📥 Select a role to apply for:', components: [row] });
   }
-});
 
-// ========== INTERACTIONS ==========
-client.on(Events.InteractionCreate, async interaction => {
-  if (interaction.isButton() && interaction.customId === 'close_ticket') {
-    await interaction.reply({ content: '🛑 Closing ticket...', ephemeral: true });
-    setTimeout(() => interaction.channel.delete().catch(() => {}), 3000);
-    return;
+  if (lc.startsWith('!ticket ')) {
+    ticketSetup.description = content.slice(8).trim();
+    return message.reply('✅ Ticket panel description set.');
   }
 
+  if (lc.startsWith('!option ')) {
+    const parts = content.slice(8).trim().split(' ');
+    const emoji = parts[0];
+    const label = parts.slice(1).join(' ');
+    if (!emoji || !label) return message.reply('❌ Use: `!option <emoji> <label>`');
+    ticketSetup.options.push({ emoji, label });
+    return message.reply(`✅ Added option: ${emoji} ${label}`);
+  }
+
+  if (lc.startsWith('!ticketviewer')) {
+    const roleId = message.mentions.roles.first()?.id;
+    if (!roleId) return message.reply('❌ Mention a valid role.');
+    ticketSetup.viewerRoleId = roleId;
+    return message.reply('✅ Viewer role set.');
+  }
+
+  if (lc.startsWith('!ticketcategory')) {
+    const ch = message.mentions.channels.first();
+    if (!ch?.parentId) return message.reply('❌ Mention a channel in a category.');
+    ticketSetup.categoryId = ch.parentId;
+    return message.reply('✅ Category set.');
+  }
+
+  if (lc === '!resetticket') {
+    ticketSetup.options = [];
+    ticketSetup.viewerRoleId = null;
+    ticketSetup.categoryId = null;
+    return message.reply('🔄 Ticket setup reset.');
+  }
+
+  if (lc === '!deployticketpanel') {
+    if (!ticketSetup.description || !ticketSetup.options.length) return message.reply('❌ Setup incomplete.');
+    const embed = new EmbedBuilder().setTitle('📩 Open a Ticket').setDescription(ticketSetup.description).setColor('Blue');
+    const menu = new StringSelectMenuBuilder().setCustomId('ticket_select').setPlaceholder('Choose category')
+      .addOptions(ticketSetup.options.map((opt, i) => ({ label: opt.label, value: `ticket_${i}`, emoji: opt.emoji })));
+    const row = new ActionRowBuilder().addComponents(menu);
+    return message.channel.send({ embeds: [embed], components: [row] });
+  }
+});
+
+client.on(Events.InteractionCreate, async interaction => {
   if (interaction.isStringSelectMenu() && interaction.customId === 'ticket_select') {
     const user = interaction.user;
     const idx = parseInt(interaction.values[0].split('_')[1]);
     const label = ticketSetup.options[idx]?.label || 'ticket';
-
-    const existing = interaction.guild.channels.cache.find(ch =>
-      ch.name.startsWith(`ticket-${user.username.toLowerCase()}`)
-    );
-    if (existing) {
-      return interaction.reply({ content: '❗ You already have an open ticket.', ephemeral: true });
-    }
 
     const ch = await interaction.guild.channels.create({
       name: `ticket-${user.username.toLowerCase()}-${Date.now().toString().slice(-4)}`,
@@ -236,12 +167,25 @@ client.on(Events.InteractionCreate, async interaction => {
       ]
     });
 
+    openTickets.set(ch.id, user.id);
+
     const btn = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('close_ticket').setLabel('Close Ticket').setStyle(ButtonStyle.Danger)
+      new ButtonBuilder().setCustomId('close_ticket').setLabel('Delete Ticket').setStyle(ButtonStyle.Danger)
     );
 
     await ch.send({ content: `🎫 Ticket for <@${user.id}> — **${label}**`, components: [btn] });
-    await interaction.reply({ content: `✅ Ticket created: <#${ch.id}>`, ephemeral: true });
+    return interaction.reply({ content: `✅ Ticket created: <#${ch.id}>`, ephemeral: true });
+  }
+
+  if (interaction.isButton() && interaction.customId === 'close_ticket') {
+    const ch = interaction.channel;
+    const messages = await ch.messages.fetch({ limit: 100 });
+    const transcript = messages.map(m => `${m.author.tag}: ${m.content}`).reverse().join('\n');
+    const userId = openTickets.get(ch.id);
+    const user = await client.users.fetch(userId);
+    await user.send(`📄 Transcript from your closed ticket:\n\n${transcript || 'No messages.'}`);
+    await ch.send('🗑️ Ticket will be deleted in 5 seconds.');
+    setTimeout(() => ch.delete().catch(() => {}), 5000);
   }
 
   if (interaction.isStringSelectMenu() && interaction.customId === 'app_select') {
@@ -256,7 +200,7 @@ client.on(Events.InteractionCreate, async interaction => {
     const cooldownMs = option.cooldown * 24 * 60 * 60 * 1000;
 
     if (last && now - last < cooldownMs) {
-      const daysLeft = msToDays(cooldownMs - (now - last));
+      const daysLeft = Math.ceil((cooldownMs - (now - last)) / (24 * 60 * 60 * 1000));
       return interaction.reply({ content: `⏳ You can apply again in **${daysLeft} day(s)**.`, ephemeral: true });
     }
 
@@ -272,21 +216,16 @@ client.on(Events.InteractionCreate, async interaction => {
       if (i >= appQuestions.length) {
         if (completed) return;
         completed = true;
-
         await dm.send({ embeds: [new EmbedBuilder().setTitle('✅ Application Complete').setDescription(`Thanks for applying for **${option.label}**.`).setColor('Green')] });
         if (logChannelId) {
           const logCh = await client.channels.fetch(logChannelId);
           const text = answers.map((a, idx) => `**Q${idx + 1}:** ${appQuestions[idx]}\n**A:** ${a}`).join('\n\n');
-          await logCh.send(`📨 New application from **${user.tag}** for **${option.label}**\n\n${text}`);
+          await logCh.send(`📨 Application from **${user.tag}** for **${option.label}**\n\n${text}`);
         }
         return;
       }
-
       await dm.send({ embeds: [
-        new EmbedBuilder()
-          .setTitle(`📋 Question ${i + 1} of ${appQuestions.length}`)
-          .setDescription(appQuestions[i])
-          .setColor('Blue')
+        new EmbedBuilder().setTitle(`📋 Question ${i + 1} of ${appQuestions.length}`).setDescription(appQuestions[i]).setColor('Blue')
       ] });
     };
 
@@ -302,5 +241,4 @@ client.on(Events.InteractionCreate, async interaction => {
   }
 });
 
-// ========== LOGIN ==========
 client.login(process.env.DISCORD_TOKEN);
