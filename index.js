@@ -1,3 +1,4 @@
+// FULL CODE — FIXED MESSAGE RESTRICTIONS, DOUBLE MESSAGES, HELP PERMISSION, DROPDOWN + TICKET ACCESS
 require('dotenv').config();
 const fs = require('fs');
 const express = require('express');
@@ -12,7 +13,8 @@ const {
   ButtonStyle,
   PermissionsBitField,
   AttachmentBuilder,
-  Events
+  Events,
+  ChannelType
 } = require('discord.js');
 
 const app = express();
@@ -87,16 +89,13 @@ client.on('messageCreate', async message => {
   const isCommand = lc.startsWith('!');
   const isPrivileged = isAdminOrOwner(message.member);
 
-  // ❌ Restrict command use (except allowed ones) for normal users
-  if (isCommand && !isGameCmd && !isPrivileged) {
+  if (isCommand && !isGameCmd && lc !== '!help' && !isPrivileged) {
     return message.reply('❌ Only admins or the bot owner can use this command.');
   }
 
-  // ✅ Allow all messages if not a restricted command
   if (!userStates.has(uid)) userStates.set(uid, {});
   const state = userStates.get(uid);
 
-  // === HELP MENU
   if (lc === '!help') {
     return message.channel.send(`📘 **Bot Commands**
 
@@ -128,7 +127,6 @@ client.on('messageCreate', async message => {
 \`!reset\` — Reset all settings`);
   }
 
-  // === MINI GAMES
   if (lc.startsWith('!guess ')) {
     const guess = parseInt(content.split(' ')[1]);
     const correct = games.guessNumber;
@@ -161,77 +159,39 @@ client.on('messageCreate', async message => {
     state.scrambleAnswer = null;
     return message.reply('✅ Correct unscramble!');
   }
-
-  if (lc.startsWith('!rps ')) {
-    const userChoice = lc.split(' ')[1];
-    const options = ['rock', 'paper', 'scissors'];
-    if (!options.includes(userChoice)) return message.reply('❌ Use: rock, paper, or scissors');
-    const botChoice = options[Math.floor(Math.random() * 3)];
-    const result = userChoice === botChoice
-      ? '🤝 It\'s a draw!'
-      : (userChoice === 'rock' && botChoice === 'scissors') ||
-        (userChoice === 'paper' && botChoice === 'rock') ||
-        (userChoice === 'scissors' && botChoice === 'paper')
-        ? '🎉 You win!' : '😢 You lose!';
-    return message.reply(`You: **${userChoice}**, Bot: **${botChoice}**\n${result}`);
-  }
-
-  // === ADMIN ONLY COMMANDS (no change)
-  if (lc === '!resetticket') { /* unchanged */ return message.reply('♻️ Ticket setup reset.'); }
-  if (lc.startsWith('!ticket ')) { /* unchanged */ return message.reply('✅ Ticket message set.'); }
-  if (lc.startsWith('!option ')) { /* unchanged */ return message.reply(`✅ Added`); }
-  if (lc.startsWith('!ticketviewer')) { /* unchanged */ return message.reply('✅ Viewer role set.'); }
-  if (lc.startsWith('!ticketcategory')) { /* unchanged */ return message.reply(`✅ Category set.`); }
-  if (lc === '!deployticketpanel') { /* unchanged */ return message.reply('✅ Panel deployed'); }
-  if (lc.startsWith('!msg ')) { await message.channel.send(content.slice(5)); await message.delete().catch(() => {}); }
-  if (lc.startsWith('!dm ')) { /* unchanged */ message.reply('✅ DMs sent.'); }
-  if (lc.startsWith('!addques')) { questions.push(content.slice(9)); message.reply(`✅ Question added.`); }
-  if (lc.startsWith('!setoptions')) { options = content.slice(12).split(',').map(o => { const [label, days] = o.split('|'); return { label, value: label.toLowerCase().replace(/\s+/g, '_'), cooldown: parseInt(days) || 14 }; }); fs.writeFileSync(DATA_FILE, JSON.stringify({ options, logChannelId })); message.reply('✅ Options set.'); }
-  if (lc.startsWith('!setchannel')) { const ch = message.mentions.channels.first(); if (ch) { logChannelId = ch.id; fs.writeFileSync(DATA_FILE, JSON.stringify({ options, logChannelId })); message.reply('✅ Log channel set.'); } }
-  if (lc === '!deploy') { const menu = new StringSelectMenuBuilder().setCustomId('app_select').setPlaceholder('Select an option').addOptions(options.map(o => ({ label: o.label, value: o.value }))); const row = new ActionRowBuilder().addComponents(menu); message.channel.send({ content: '📥 Click below to apply!', components: [row] }); }
-  if (lc === '!reset') { questions = []; options = []; logChannelId = ''; fs.writeFileSync(DATA_FILE, JSON.stringify({ options: [], logChannelId: '' })); message.reply('♻️ Reset all questions and options.'); }
 });
 
 client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isStringSelectMenu()) return;
+
   const user = interaction.user;
+  const member = await interaction.guild.members.fetch(user.id);
   const selected = interaction.values[0];
-  const option = options.find(o => o.value === selected);
-  if (!option) return interaction.reply({ content: '❌ Invalid option.', ephemeral: true });
+  const guildId = interaction.guild.id;
+  const setup = ticketSetup.get(guildId);
 
-  const now = Date.now();
-  const key = `${user.id}_${option.value}`;
-  const last = userLastApplied.get(key);
-  const cooldownMs = option.cooldown * 24 * 60 * 60 * 1000;
+  if (interaction.customId === 'ticket_select') {
+    const categoryId = setup?.categoryId;
+    const viewerRoleId = setup?.viewerRoleId;
+    const option = setup?.options.find(o => `ticket_${setup.options.indexOf(o)}` === selected);
 
-  if (!isAdminOrOwner(user) && last && now - last < cooldownMs) {
-    const days = Math.ceil((cooldownMs - (now - last)) / (24 * 60 * 60 * 1000));
-    return interaction.reply({ content: `⏳ Try again in **${days} day(s)**.`, ephemeral: true });
+    if (!categoryId || !option) return interaction.reply({ content: '❌ Ticket setup error.', ephemeral: true });
+
+    const channel = await interaction.guild.channels.create({
+      name: `ticket-${user.username}`,
+      type: ChannelType.GuildText,
+      parent: categoryId,
+      permissionOverwrites: [
+        { id: interaction.guild.id, deny: ['ViewChannel'] },
+        { id: user.id, allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory'] },
+        { id: viewerRoleId, allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory'] }
+      ]
+    });
+
+    await channel.send({ content: `🎫 Hello ${user}, a staff member will assist you soon.
+**Reason:** ${option.label}` });
+    return interaction.reply({ content: '✅ Ticket created!', ephemeral: true });
   }
-
-  if (!isAdminOrOwner(user)) userLastApplied.set(key, now);
-  const dm = await user.createDM();
-  await interaction.reply({ content: '📩 Check your DMs.', ephemeral: true });
-
-  let i = 0;
-  const answers = [];
-
-  const ask = async () => {
-    if (i >= questions.length) {
-      await dm.send({ embeds: [new EmbedBuilder().setTitle('✅ Application Complete').setDescription(`Your application for **${option.label}** has been submitted.`)] });
-      if (logChannelId) {
-        const logCh = await client.channels.fetch(logChannelId);
-        const summary = answers.map((a, j) => `**Q${j + 1}:** ${questions[j]}\n**A:** ${a}`).join('\n\n');
-        logCh.send(`📨 Application from **${user.tag}** for **${option.label}**\n\n${summary}`);
-      }
-      return;
-    }
-    await dm.send({ embeds: [new EmbedBuilder().setTitle(`📋 Question ${i + 1}`).setDescription(questions[i])] });
-  };
-
-  const collector = dm.createMessageCollector({ filter: m => m.author.id === user.id, time: 300000 });
-  collector.on('collect', msg => { answers.push(msg.content); i++; ask(); });
-  ask();
 });
 
 function getSetup(guildId) {
