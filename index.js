@@ -1,4 +1,4 @@
-// FINAL DISCORD BOT CODE with FIXED TICKET + APPLICATION SYSTEM + CLOSE BUTTON
+// FINAL DISCORD BOT CODE — Full Version with Ticket + Application System + Close Button + Fixed Trigger
 require('dotenv').config();
 const fs = require('fs');
 const express = require('express');
@@ -82,11 +82,18 @@ client.on('messageCreate', async message => {
   if (!userStates.has(uid)) userStates.set(uid, {});
   const state = userStates.get(uid);
 
-  const isGameCmd = ['!guess', '!trivia', '!scramble', '!rps'].some(cmd => lc.startsWith(cmd));
-  const isGeneralCmd = ['!help'].some(cmd => lc === cmd);
-  const isRestricted = !isGameCmd && !isGeneralCmd && !isAdminOrOwner(message.member);
-  if (isRestricted) return message.reply('❌ Only admins or the bot owner can use this command.');
+  const gameCmds = ['!guess', '!trivia', '!scramble', '!rps'];
+  const generalCmds = ['!help'];
+  const appTicketCmds = ['!addques', '!setoptions', '!setchannel', '!deploy', '!reset', '!ticket', '!option', '!resetticket', '!ticketviewer', '!ticketcategory', '!deployticketpanel', '!msg', '!dm'];
+  const matchedGame = gameCmds.find(c => lc.startsWith(c));
+  const matchedApp = appTicketCmds.find(c => lc.startsWith(c));
+  const isGeneral = generalCmds.includes(lc);
 
+  if (!matchedGame && !matchedApp && !isGeneral && !isAdminOrOwner(message.member)) {
+    return message.reply('❌ Only admins or the bot owner can use this command.');
+  }
+
+  // HELP
   if (lc === '!help') {
     return message.channel.send(`📘 **Bot Commands**
 
@@ -118,14 +125,75 @@ client.on('messageCreate', async message => {
 \`!reset\` — Reset all settings`);
   }
 
-  if (lc === '!deploy') {
-    if (!options.length) return message.reply('❌ No application options set.');
+  if (matchedApp && !isAdminOrOwner(message.member)) {
+    return message.reply('❌ Only admins or the bot owner can use application/ticket setup commands.');
+  }
+
+  if (lc.startsWith('!ticket ')) {
+    const setup = getSetup(message.guild.id);
+    setup.description = content.slice(8);
+    const att = message.attachments.first();
+    if (att) setup.footerImage = att.url;
+    saveTicketSetup();
+    return message.reply('✅ Ticket message set.');
+  }
+
+  if (lc.startsWith('!option ')) {
+    const setup = getSetup(message.guild.id);
+    const args = content.slice(8).trim().split(' ');
+    const emoji = args.shift();
+    const label = args.join(' ');
+    setup.options.push({ emoji, label });
+    saveTicketSetup();
+    return message.reply(`✅ Added: ${emoji} ${label}`);
+  }
+
+  if (lc === '!resetticket') {
+    ticketSetup.set(message.guild.id, { description: '', options: [], viewerRoleId: null, categoryId: null, footerImage: null });
+    saveTicketSetup();
+    return message.reply('♻️ Ticket setup reset.');
+  }
+
+  if (lc.startsWith('!ticketviewer')) {
+    const setup = getSetup(message.guild.id);
+    const match = content.match(/<@&(\d+)>/);
+    if (!match) return message.reply('❌ Mention a valid role.');
+    setup.viewerRoleId = match[1];
+    saveTicketSetup();
+    return message.reply('✅ Viewer role set.');
+  }
+
+  if (lc.startsWith('!ticketcategory')) {
+    const setup = getSetup(message.guild.id);
+    const match = content.match(/<#(\d+)>/);
+    if (!match) return message.reply('❌ Mention a valid channel.');
+    const ch = message.guild.channels.cache.get(match[1]);
+    if (!ch?.parentId) return message.reply('❌ Channel has no category.');
+    setup.categoryId = ch.parentId;
+    saveTicketSetup();
+    return message.reply(`✅ Category set.`);
+  }
+
+  if (lc === '!deployticketpanel') {
+    const setup = getSetup(message.guild.id);
+    if (!setup.description || !setup.options.length || !setup.viewerRoleId || !setup.categoryId)
+      return message.reply('❌ Setup incomplete.');
+
+    const embed = new EmbedBuilder()
+      .setTitle('📩 Open a Ticket')
+      .setDescription(setup.description)
+      .setColor('Blue');
+    if (setup.footerImage) embed.setImage(setup.footerImage);
+
     const menu = new StringSelectMenuBuilder()
-      .setCustomId('app_select')
-      .setPlaceholder('Select an option')
-      .addOptions(options.map(o => ({ label: o.label, value: o.value })));
+      .setCustomId('ticket_select')
+      .setPlaceholder('Select ticket category')
+      .addOptions(setup.options.map((opt, i) => ({
+        label: opt.label, value: `ticket_${i}`, emoji: opt.emoji
+      })));
+
     const row = new ActionRowBuilder().addComponents(menu);
-    message.channel.send({ content: '📥 Click below to apply!', components: [row] });
+    return message.channel.send({ embeds: [embed], components: [row] });
   }
 
   if (lc.startsWith('!addques')) {
@@ -152,6 +220,16 @@ client.on('messageCreate', async message => {
     message.reply('✅ Log channel set.');
   }
 
+  if (lc === '!deploy') {
+    if (!options.length) return message.reply('❌ No application options set.');
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId('app_select')
+      .setPlaceholder('Select an option')
+      .addOptions(options.map(o => ({ label: o.label, value: o.value })));
+    const row = new ActionRowBuilder().addComponents(menu);
+    message.channel.send({ content: '📥 Click below to apply!', components: [row] });
+  }
+
   if (lc === '!reset') {
     questions = [];
     options = [];
@@ -160,6 +238,7 @@ client.on('messageCreate', async message => {
     message.reply('♻️ Reset all questions and options.');
   }
 });
+
 
 client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isStringSelectMenu()) return;
@@ -245,7 +324,7 @@ client.on(Events.InteractionCreate, async interaction => {
   if (interaction.customId === 'close_ticket') {
     const ch = interaction.channel;
     if (!ch.name.startsWith('ticket-')) return;
-    await interaction.reply({ content: '🛑 Closing this ticket in 3 seconds...', ephemeral: true });
+    await interaction.reply({ content: '🛑 Closing this ticket.', ephemeral: true });
     setTimeout(() => ch.delete().catch(() => {}), 3000);
   }
 });
