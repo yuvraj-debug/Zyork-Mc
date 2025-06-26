@@ -1,158 +1,266 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType } = require('discord.js');
+const express = require('express');
+const {
+  Client,
+  GatewayIntentBits,
+  Partials,
+  EmbedBuilder,
+  ActionRowBuilder,
+  StringSelectMenuBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  PermissionsBitField,
+  AttachmentBuilder
+} = require('discord.js');
 
+// Keep-alive server
+const app = express();
+app.get('/', (_, res) => res.send('Bot is alive!'));
+app.listen(3000, () => console.log('✅ Keep-alive server running'));
+
+// Discord client setup
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.DirectMessages,
-    GatewayIntentBits.GuildMembers
-  ]
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.DirectMessages
+  ],
+  partials: [Partials.Channel]
 });
 
 // Data storage
-const appData = {
-  questions: [],
-  options: {},
-  channel: null,
-  cooldowns: new Map()
+const data = {
+  tickets: new Map(), // guildId -> ticket setup
+  applications: new Map(), // guildId -> application setup
+  userStates: new Map(), // userId -> game states
+  gameData: {
+    guessNumber: Math.floor(Math.random() * 100) + 1,
+    scrambleWords: ['banana', 'elephant', 'discord', 'javascript', 'pirate'],
+    triviaQuestions: [
+      { question: 'What is the capital of France?', answer: 'paris' },
+      { question: 'Which planet is known as the Red Planet?', answer: 'mars' },
+      { question: '2 + 2 * 2 = ?', answer: '6' }
+    ]
+  }
 };
 
-const ticketData = {
-  message: null,
-  options: [],
-  viewerRole: null,
-  category: null
+// Utility functions
+const scramble = word => word.split('').sort(() => 0.5 - Math.random()).join('');
+const getGuildData = (guildId, type) => {
+  if (!data[type].has(guildId)) {
+    data[type].set(guildId, type === 'tickets' ? {
+      description: '',
+      options: [],
+      viewerRoleId: null,
+      categoryId: null,
+      footerImage: null
+    } : {
+      questions: [],
+      options: {},
+      channelId: null,
+      cooldowns: new Map()
+    });
+  }
+  return data[type].get(guildId);
 };
 
-const activeApplications = new Set();
+client.once('ready', () => console.log(`🤖 Logged in as ${client.user.tag}`));
 
-// Mini-Games
+// Command handler
 client.on('messageCreate', async message => {
-  if (message.author.bot) return;
+  if (message.author.bot || !message.guild) return;
 
-  // Guess command
-  if (message.content.startsWith('!guess')) {
-    const number = parseInt(message.content.split(' ')[1]);
-    if (isNaN(number) || number < 1 || number > 10) {
-      return message.reply('Please guess a number between 1 and 10!');
-    }
+  const { author, content, guild } = message;
+  const uid = author.id;
+  const raw = content.trim();
+  const lc = raw.toLowerCase();
 
-    const correct = Math.floor(Math.random() * 10) + 1;
-    if (number === correct) {
-      message.reply(`🎉 Congratulations! You guessed the correct number: ${correct}`);
-    } else {
-      message.reply(`Sorry, the correct number was ${correct}. Better luck next time!`);
-    }
+  // Initialize user state if needed
+  if (!data.userStates.has(uid)) data.userStates.set(uid, {});
+  const state = data.userStates.get(uid);
+
+  // === HELP COMMAND ===
+  if (lc === '!help') {
+    const embed = new EmbedBuilder()
+      .setTitle('📘 Bot Command Overview')
+      .setColor('#0099ff')
+      .addFields(
+        {
+          name: '🎟️ Ticket System',
+          value: [
+            '`!ticket <message>` — Set ticket message',
+            '`!option <emoji> <label>` — Add a category',
+            '`!ticketviewer @role` — Set viewer role',
+            '`!ticketcategory #channel` — Set ticket category',
+            '`!deployticketpanel` — Deploy ticket menu'
+          ].join('\n')
+        },
+        {
+          name: '📝 Application System',
+          value: [
+            '`!addques <question>` — Add application question',
+            '`!setoptions Option|Cooldown,...` — Set options with cooldown',
+            '`!setchannel #channel` — Set log channel',
+            '`!deployapp` — Deploy application menu',
+            '`!resetapp` — Reset application data'
+          ].join('\n')
+        },
+        {
+          name: '🎮 Mini-Games',
+          value: [
+            '`!guess <number>` — Guess a number (1-100)',
+            '`!trivia` — Answer a trivia question',
+            '`!scramble` — Unscramble word',
+            '`!rps <rock|paper|scissors>` — Rock paper scissors'
+          ].join('\n')
+        }
+      );
+
+    return message.reply({ embeds: [embed] });
   }
 
-  // Trivia command
-  if (message.content.startsWith('!trivia')) {
-    const questions = [
-      { question: "What is the capital of France?", answer: "Paris" },
-      { question: "How many continents are there?", answer: "7" },
-      { question: "What is the largest planet in our solar system?", answer: "Jupiter" }
-    ];
-    const question = questions[Math.floor(Math.random() * questions.length)];
-
-    await message.reply(`**Trivia Question:** ${question.question}`);
-
-    const filter = m => m.author.id === message.author.id;
-    try {
-      const collected = await message.channel.awaitMessages({
-        filter,
-        max: 1,
-        time: 30000,
-        errors: ['time']
-      });
-
-      const answer = collected.first().content.toLowerCase();
-      if (answer === question.answer.toLowerCase()) {
-        message.reply('✅ Correct!');
-      } else {
-        message.reply(`❌ Incorrect! The correct answer is: ${question.answer}`);
-      }
-    } catch {
-      message.reply('⏰ Time\'s up!');
+  // === TICKET SYSTEM ===
+  if (lc.startsWith('!ticket ')) {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return message.reply('❌ You need administrator permissions to set up tickets.');
     }
+    const setup = getGuildData(guild.id, 'tickets');
+    setup.description = raw.slice(8).trim();
+    const att = message.attachments.first();
+    setup.footerImage = att ? att.url : null;
+    return message.reply('✅ Ticket message set.');
   }
 
-  // Scramble command
-  if (message.content.startsWith('!scramble')) {
-    const words = ["python", "discord", "banana", "elephant", "guitar"];
-    const word = words[Math.floor(Math.random() * words.length)];
-    const scrambled = word.split('').sort(() => 0.5 - Math.random()).join('');
-
-    await message.reply(`Unscramble this word: **${scrambled}**`);
-
-    const filter = m => m.author.id === message.author.id && m.content.toLowerCase() === word.toLowerCase();
-    try {
-      await message.channel.awaitMessages({
-        filter,
-        max: 1,
-        time: 30000,
-        errors: ['time']
-      });
-      message.reply('🎉 Correct! You unscrambled the word!');
-    } catch {
-      message.reply(`⏰ Time's up! The word was: **${word}**`);
+  if (lc.startsWith('!option ')) {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return message.reply('❌ You need administrator permissions to add ticket options.');
     }
-  }
-});
-
-// Applications
-client.on('messageCreate', async message => {
-  if (message.author.bot) return;
-
-  // Add question command
-  if (message.content.startsWith('!addques') && message.member?.permissions.has('Administrator')) {
-    const question = message.content.slice(8).trim();
-    appData.questions.push(question);
-    message.reply(`✅ Added question: ${question}`);
+    const setup = getGuildData(guild.id, 'tickets');
+    const args = raw.slice(8).trim().split(' ');
+    const emoji = args.shift();
+    const label = args.join(' ');
+    if (!emoji || !label) return message.reply('Usage: `!option <emoji> <label>`');
+    if (setup.options.length >= 25) return message.reply('❌ Max 25 options allowed.');
+    setup.options.push({ emoji, label });
+    return message.reply(`✅ Added: ${emoji} ${label}`);
   }
 
-  // Set options command
-  if (message.content.startsWith('!setoptions') && message.member?.permissions.has('Administrator')) {
-    const optionsStr = message.content.slice(11).trim();
+  if (lc.startsWith('!ticketviewer')) {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return message.reply('❌ You need administrator permissions to set viewer role.');
+    }
+    const setup = getGuildData(guild.id, 'tickets');
+    const match = raw.match(/<@&(\d+)>/);
+    if (!match) return message.reply('❌ Mention a valid role.');
+    setup.viewerRoleId = match[1];
+    return message.reply('✅ Viewer role set.');
+  }
+
+  if (lc.startsWith('!ticketcategory')) {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return message.reply('❌ You need administrator permissions to set ticket category.');
+    }
+    const setup = getGuildData(guild.id, 'tickets');
+    const match = raw.match(/<#(\d+)>/);
+    if (!match) return message.reply('❌ Mention a valid channel.');
+    const ch = guild.channels.cache.get(match[1]);
+    if (!ch?.parentId) return message.reply('❌ Channel has no category.');
+    setup.categoryId = ch.parentId;
+    const parent = guild.channels.cache.get(setup.categoryId);
+    return message.reply(`✅ Ticket category set to **${parent?.name}**.`);
+  }
+
+  if (lc === '!deployticketpanel') {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return message.reply('❌ You need administrator permissions to deploy ticket panel.');
+    }
+    const setup = getGuildData(guild.id, 'tickets');
+    if (!setup.description || !setup.options.length || !setup.viewerRoleId || !setup.categoryId) {
+      return message.reply('❌ Setup incomplete. Need description, options, viewer role, and category.');
+    }
+
+    const embed = new EmbedBuilder()
+      .setTitle('📩 Open a Ticket')
+      .setDescription(setup.description)
+      .setColor('Blue');
+    if (setup.footerImage) embed.setImage(setup.footerImage);
+
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId('ticket_select')
+      .setPlaceholder('Select a ticket category')
+      .addOptions(setup.options.map((opt, i) => ({
+        label: opt.label,
+        value: `ticket_${i}`,
+        emoji: opt.emoji
+      })));
+
+    const row = new ActionRowBuilder().addComponents(menu);
+    await message.channel.send({ embeds: [embed], components: [row] });
+    return message.delete().catch(() => {});
+  }
+
+  // === APPLICATION SYSTEM ===
+  if (lc.startsWith('!addques ')) {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return message.reply('❌ You need administrator permissions to add questions.');
+    }
+    const app = getGuildData(guild.id, 'applications');
+    const question = raw.slice(9).trim();
+    app.questions.push(question);
+    return message.reply(`✅ Added question: ${question}`);
+  }
+
+  if (lc.startsWith('!setoptions ')) {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return message.reply('❌ You need administrator permissions to set options.');
+    }
+    const app = getGuildData(guild.id, 'applications');
+    const optionsStr = raw.slice(11).trim();
     const optionsList = optionsStr.split(',').map(opt => opt.trim());
     
-    appData.options = {};
+    app.options = {};
     for (const opt of optionsList) {
       if (opt.includes('|')) {
         const [name, cooldown] = opt.split('|').map(x => x.trim());
-        appData.options[name] = parseInt(cooldown) || 0;
+        app.options[name] = parseInt(cooldown) || 0;
       } else {
-        appData.options[opt] = 0;
+        app.options[opt] = 0;
       }
     }
-    message.reply('✅ Application options set!');
+    return message.reply('✅ Application options set!');
   }
 
-  // Set channel command
-  if (message.content.startsWith('!setchannel') && message.member?.permissions.has('Administrator')) {
+  if (lc.startsWith('!setchannel ')) {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return message.reply('❌ You need administrator permissions to set channel.');
+    }
+    const app = getGuildData(guild.id, 'applications');
     const channelId = message.mentions.channels.first()?.id;
     if (channelId) {
-      appData.channel = channelId;
-      message.reply(`✅ Application log channel set to <#${channelId}>`);
-    } else {
-      message.reply('❌ Please mention a valid channel!');
+      app.channelId = channelId;
+      return message.reply(`✅ Application log channel set to <#${channelId}>`);
     }
+    return message.reply('❌ Please mention a valid channel!');
   }
 
-  // Deploy command
-  if (message.content.startsWith('!deploy') && message.member?.permissions.has('Administrator')) {
-    if (appData.questions.length === 0 || Object.keys(appData.options).length === 0) {
+  if (lc === '!deployapp') {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return message.reply('❌ You need administrator permissions to deploy application.');
+    }
+    const app = getGuildData(guild.id, 'applications');
+    if (app.questions.length === 0 || Object.keys(app.options).length === 0) {
       return message.reply('❌ Please set questions and options first!');
     }
 
     const embed = new EmbedBuilder()
       .setTitle('Application Menu')
       .setDescription('Click the button below to start an application!')
-      .setColor(0x3498db);
+      .setColor('Green');
 
     const row = new ActionRowBuilder();
-    for (const option in appData.options) {
+    for (const option in app.options) {
       row.addComponents(
         new ButtonBuilder()
           .setCustomId(`app_${option}`)
@@ -161,108 +269,232 @@ client.on('messageCreate', async message => {
       );
     }
 
-    message.channel.send({ embeds: [embed], components: [row] });
+    await message.channel.send({ embeds: [embed], components: [row] });
+    return message.delete().catch(() => {});
   }
 
-  // Reset command
-  if (message.content.startsWith('!reset') && message.member?.permissions.has('Administrator')) {
-    appData.questions = [];
-    appData.options = {};
-    appData.channel = null;
-    appData.cooldowns.clear();
-    message.reply('✅ Application data has been reset!');
+  if (lc === '!resetapp') {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return message.reply('❌ You need administrator permissions to reset application.');
+    }
+    const app = getGuildData(guild.id, 'applications');
+    app.questions = [];
+    app.options = {};
+    app.channelId = null;
+    app.cooldowns.clear();
+    return message.reply('✅ Application data has been reset!');
+  }
+
+  // === MINI-GAMES ===
+  if (lc.startsWith('!guess ')) {
+    const num = parseInt(raw.split(' ')[1]);
+    if (isNaN(num)) return message.reply('❓ Enter a valid number.');
+    
+    state.guess = { 
+      active: true, 
+      answered: false, 
+      answer: data.gameData.guessNumber 
+    };
+
+    if (num === data.gameData.guessNumber) {
+      message.reply(`🎉 Correct! It was ${data.gameData.guessNumber}.`);
+      data.gameData.guessNumber = Math.floor(Math.random() * 100) + 1;
+      state.guess = null;
+    } else {
+      message.reply(num < data.gameData.guessNumber ? '🔼 Too low!' : '🔽 Too high!');
+      state.guess.answered = true;
+    }
+    return;
+  } else if (state.guess?.active && !state.guess.answered) {
+    const num = parseInt(raw);
+    if (!isNaN(num) && num !== state.guess.answer) {
+      message.reply(num < state.guess.answer ? '🔼 Too low!' : '🔽 Too high!');
+      state.guess.answered = true;
+    }
+    return;
+  }
+
+  if (lc === '!trivia') {
+    const q = data.gameData.triviaQuestions[Math.floor(Math.random() * data.gameData.triviaQuestions.length)];
+    state.trivia = { active: true, answered: false, answer: q.answer };
+    return message.channel.send(`❓ ${q.question}`);
+  } else if (state.trivia?.active) {
+    if (raw.toLowerCase() === state.trivia.answer) {
+      message.reply('✅ Correct!');
+      state.trivia = null;
+    } else if (!state.trivia.answered) {
+      message.reply('❌ Wrong answer, try again!');
+      state.trivia.answered = true;
+    }
+    return;
+  }
+
+  if (lc === '!scramble') {
+    const word = data.gameData.scrambleWords[Math.floor(Math.random() * data.gameData.scrambleWords.length)];
+    state.scramble = { active: true, answered: false, answer: word };
+    return message.channel.send(`🔤 Unscramble this: **${scramble(word)}**`);
+  } else if (state.scramble?.active) {
+    if (raw.toLowerCase() === state.scramble.answer) {
+      message.reply(`✅ Well done! The word was **${state.scramble.answer}**`);
+      state.scramble = null;
+    } else if (!state.scramble.answered) {
+      message.reply('❌ Nope, that's not it!');
+      state.scramble.answered = true;
+    }
+    return;
+  }
+
+  if (lc.startsWith('!rps ')) {
+    const player = raw.split(' ')[1]?.toLowerCase();
+    const opts = ['rock', 'paper', 'scissors'];
+    if (!opts.includes(player)) return message.reply('🪨 📄 ✂️ Choose rock, paper, or scissors.');
+    const botPick = opts[Math.floor(Math.random() * opts.length)];
+    const result =
+      player === botPick
+        ? 'Draw!'
+        : (player === 'rock' && botPick === 'scissors') ||
+          (player === 'paper' && botPick === 'rock') ||
+          (player === 'scissors' && botPick === 'paper')
+        ? 'You win!'
+        : 'I win!';
+    return message.reply(`You chose **${player}**, I chose **${botPick}** → ${result}`);
   }
 });
 
-// Tickets
-client.on('messageCreate', async message => {
-  if (message.author.bot) return;
-
-  // Ticket message command
-  if (message.content.startsWith('!ticket') && message.member?.permissions.has('Administrator')) {
-    const ticketMessage = message.content.slice(8).trim();
-    ticketData.message = ticketMessage;
-    message.reply('✅ Ticket panel message set!');
-  }
-
-  // Ticket option command
-  if (message.content.startsWith('!option') && message.member?.permissions.has('Administrator')) {
-    const parts = message.content.slice(8).trim().split(' ');
-    const emoji = parts.shift();
-    const label = parts.join(' ');
-    ticketData.options.push({ emoji, label });
-    message.reply(`✅ Added ticket option: ${emoji} ${label}`);
-  }
-
-  // Ticket viewer command
-  if (message.content.startsWith('!ticketviewer') && message.member?.permissions.has('Administrator')) {
-    const role = message.mentions.roles.first();
-    if (role) {
-      ticketData.viewerRole = role.id;
-      message.reply(`✅ Ticket viewer role set to ${role}`);
-    } else {
-      message.reply('❌ Please mention a valid role!');
-    }
-  }
-
-  // Ticket category command
-  if (message.content.startsWith('!ticketcategory') && message.member?.permissions.has('Administrator')) {
-    const category = message.mentions.channels.first();
-    if (category && category.type === ChannelType.GuildCategory) {
-      ticketData.category = category.id;
-      message.reply(`✅ Ticket category set to ${category.name}`);
-    } else {
-      message.reply('❌ Please mention a valid category!');
-    }
-  }
-
-  // Deploy ticket panel command
-  if (message.content.startsWith('!deployticketpanel') && message.member?.permissions.has('Administrator')) {
-    if (ticketData.options.length === 0) {
-      return message.reply('❌ Please add ticket options first!');
-    }
-
-    const embed = new EmbedBuilder()
-      .setTitle('Ticket Panel')
-      .setDescription(ticketData.message || 'Click a button below to create a ticket!')
-      .setColor(0x7289da);
-
-    const row = new ActionRowBuilder();
-    for (const option of ticketData.options) {
-      row.addComponents(
-        new ButtonBuilder()
-          .setCustomId(`ticket_${option.label.replace(/ /g, '_')}`)
-          .setEmoji(option.emoji)
-          .setLabel(option.label)
-          .setStyle(ButtonStyle.Secondary)
-      );
-    }
-
-    message.channel.send({ embeds: [embed], components: [row] });
-  }
-
-  // Reset ticket command
-  if (message.content.startsWith('!resetticket') && message.member?.permissions.has('Administrator')) {
-    ticketData.message = null;
-    ticketData.options = [];
-    ticketData.viewerRole = null;
-    ticketData.category = null;
-    message.reply('✅ Ticket setup has been reset!');
-  }
-});
-
-// Application button handling
+// Interaction handling
 client.on('interactionCreate', async interaction => {
-  if (!interaction.isButton()) return;
+  if (!interaction.guild) return;
 
-  // Application handling
-  if (interaction.customId.startsWith('app_')) {
+  // Ticket system interactions
+  if (interaction.isStringSelectMenu() && interaction.customId === 'ticket_select') {
+    const setup = getGuildData(interaction.guild.id, 'tickets');
+    if (!setup.options.length || !setup.viewerRoleId || !setup.categoryId) {
+      return interaction.reply({ content: '❌ Ticket system not fully configured.', ephemeral: true });
+    }
+
+    const idx = parseInt(interaction.values[0].split('_')[1]);
+    const opt = setup.options[idx];
+    const user = interaction.user;
+
+    // Check for existing ticket
+    const existing = interaction.guild.channels.cache.find(c =>
+      c.name.startsWith(`ticket-${user.username.toLowerCase()}`)
+    );
+    if (existing) {
+      return interaction.reply({ 
+        content: `⚠️ You already have a ticket: <#${existing.id}>`, 
+        ephemeral: true 
+      });
+    }
+
+    // Create ticket channel
+    const name = `ticket-${user.username.toLowerCase().replace(/\s+/g, '-')}-${Date.now().toString().slice(-4)}`;
+    const ch = await interaction.guild.channels.create({
+      name,
+      type: ChannelType.GuildText,
+      parent: setup.categoryId,
+      permissionOverwrites: [
+        { 
+          id: interaction.guild.roles.everyone, 
+          deny: [PermissionsBitField.Flags.ViewChannel] 
+        },
+        { 
+          id: user.id, 
+          allow: [
+            PermissionsBitField.Flags.ViewChannel, 
+            PermissionsBitField.Flags.SendMessages, 
+            PermissionsBitField.Flags.ReadMessageHistory
+          ] 
+        },
+        { 
+          id: setup.viewerRoleId, 
+          allow: [
+            PermissionsBitField.Flags.ViewChannel, 
+            PermissionsBitField.Flags.SendMessages, 
+            PermissionsBitField.Flags.ReadMessageHistory
+          ] 
+        }
+      ]
+    });
+
+    // Send ticket message
+    await ch.send({ 
+      content: `🎫 <@${user.id}> opened **${opt.label}** ticket. <@&${setup.viewerRoleId}>`, 
+      allowedMentions: { 
+        users: [user.id], 
+        roles: [setup.viewerRoleId] 
+      } 
+    });
+
+    // Add delete button
+    const delBtn = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('ticket_delete')
+        .setLabel('Delete Ticket')
+        .setStyle(ButtonStyle.Danger)
+    );
+    await ch.send({ 
+      content: '🗑️ Click to close and get transcript.', 
+      components: [delBtn] 
+    });
+
+    return interaction.reply({ 
+      content: `✅ Ticket created: <#${ch.id}>`, 
+      ephemeral: true 
+    });
+  }
+
+  // Ticket deletion
+  if (interaction.isButton() && interaction.customId === 'ticket_delete') {
+    const ch = interaction.channel;
+    if (!ch.name.startsWith('ticket-')) return;
+
+    // Check permissions
+    const hasPermission = interaction.member.permissions.has(PermissionsBitField.Flags.ManageChannels) || 
+                         interaction.member.roles.cache.has(getGuildData(interaction.guild.id, 'tickets').viewerRoleId);
+    if (!hasPermission) {
+      return interaction.reply({ 
+        content: '❌ You need permission to delete tickets.', 
+        ephemeral: true 
+      });
+    }
+
+    await interaction.reply({ content: '🗂️ Generating transcript...', ephemeral: true });
+
+    // Create transcript
+    const msgs = await ch.messages.fetch({ limit: 100 });
+    const transcript = [...msgs.values()]
+      .reverse()
+      .map(m => `${m.author.tag} [${m.createdAt.toLocaleString()}]: ${m.content}`)
+      .join('\n');
+
+    const file = new AttachmentBuilder(Buffer.from(transcript), { name: 'transcript.txt' });
+
+    // Send to ticket creator
+    const uname = ch.name.split('-')[1];
+    const member = interaction.guild.members.cache.find(m => 
+      m.user.username.toLowerCase().startsWith(uname)
+    );
+    if (member) {
+      member.send({ 
+        content: `📁 Your ticket was closed by **${interaction.user.tag}**.`, 
+        files: [file] 
+      }).catch(() => {});
+    }
+
+    // Delete channel after delay
+    setTimeout(() => ch.delete().catch(() => {}), 3000);
+  }
+
+  // Application system interactions
+  if (interaction.isButton() && interaction.customId.startsWith('app_')) {
+    const app = getGuildData(interaction.guild.id, 'applications');
     const option = interaction.customId.slice(4);
     const userId = interaction.user.id;
 
     // Check cooldown
-    if (appData.cooldowns.has(option) && appData.cooldowns.get(option).has(userId)) {
-      const remaining = appData.cooldowns.get(option).get(userId) - Date.now();
+    if (app.cooldowns.has(option) && app.cooldowns.get(option).has(userId)) {
+      const remaining = app.cooldowns.get(option).get(userId) - Date.now();
       if (remaining > 0) {
         return interaction.reply({
           content: `⏳ You're on cooldown for this application. Try again in ${Math.floor(remaining / 1000)} seconds.`,
@@ -271,8 +503,9 @@ client.on('interactionCreate', async interaction => {
       }
     }
 
-    // Check active application
-    if (activeApplications.has(userId)) {
+    // Check for active application
+    const userState = data.userStates.get(userId) || {};
+    if (userState.applicationActive) {
       return interaction.reply({
         content: '❌ You already have an application in progress!',
         ephemeral: true
@@ -286,13 +519,14 @@ client.on('interactionCreate', async interaction => {
       });
 
       const dmChannel = await interaction.user.createDM();
-      activeApplications.add(userId);
+      userState.applicationActive = true;
+      data.userStates.set(userId, userState);
 
       await dmChannel.send('**Application Started!** Please answer the following questions:');
 
       const responses = [];
-      for (let i = 0; i < appData.questions.length; i++) {
-        const question = appData.questions[i];
+      for (let i = 0; i < app.questions.length; i++) {
+        const question = app.questions[i];
         await dmChannel.send(`**Question ${i + 1}:** ${question}`);
 
         try {
@@ -304,35 +538,37 @@ client.on('interactionCreate', async interaction => {
           responses.push(collected.first().content);
         } catch {
           await dmChannel.send('⏰ Application timed out due to inactivity.');
-          activeApplications.delete(userId);
+          userState.applicationActive = false;
+          data.userStates.set(userId, userState);
           return;
         }
       }
 
       // Application completed
-      activeApplications.delete(userId);
+      userState.applicationActive = false;
+      data.userStates.set(userId, userState);
 
       // Set cooldown
-      const cooldown = appData.options[option] || 0;
+      const cooldown = app.options[option] || 0;
       if (cooldown > 0) {
-        if (!appData.cooldowns.has(option)) {
-          appData.cooldowns.set(option, new Map());
+        if (!app.cooldowns.has(option)) {
+          app.cooldowns.set(option, new Map());
         }
-        appData.cooldowns.get(option).set(userId, Date.now() + cooldown * 1000);
+        app.cooldowns.get(option).set(userId, Date.now() + cooldown * 1000);
       }
 
       // Send to log channel
-      if (appData.channel) {
-        const logChannel = await client.channels.fetch(appData.channel);
+      if (app.channelId) {
+        const logChannel = await client.channels.fetch(app.channelId);
         if (logChannel) {
           const embed = new EmbedBuilder()
             .setTitle(`New Application: ${option}`)
             .setDescription(`From ${interaction.user} (${interaction.user.tag})`)
             .setColor(0x2ecc71);
 
-          for (let i = 0; i < appData.questions.length; i++) {
+          for (let i = 0; i < app.questions.length; i++) {
             embed.addFields({
-              name: `Question ${i + 1}: ${appData.questions[i]}`,
+              name: `Question ${i + 1}: ${app.questions[i]}`,
               value: responses[i] || 'No response',
               inline: false
             });
@@ -351,122 +587,7 @@ client.on('interactionCreate', async interaction => {
       });
     }
   }
-
-  // Ticket handling
-  if (interaction.customId.startsWith('ticket_')) {
-    const label = interaction.customId.slice(7).replace(/_/g, ' ');
-    const guild = interaction.guild;
-    const user = interaction.user;
-
-    // Check if category exists
-    let category = null;
-    if (ticketData.category) {
-      category = await guild.channels.fetch(ticketData.category);
-    }
-
-    // Create ticket channel
-    const overwrites = [
-      { id: guild.id, deny: ['ViewChannel'] },
-      { id: user.id, allow: ['ViewChannel'] }
-    ];
-
-    // Add viewer role if set
-    if (ticketData.viewerRole) {
-      overwrites.push({ id: ticketData.viewerRole, allow: ['ViewChannel'] });
-    }
-
-    try {
-      const channel = await guild.channels.create({
-        name: `ticket-${user.username}`,
-        type: ChannelType.GuildText,
-        parent: category,
-        permissionOverwrites: overwrites
-      });
-
-      // Send ticket message with delete button
-      const embed = new EmbedBuilder()
-        .setTitle(`Ticket: ${label}`)
-        .setDescription(`Created by ${user}`)
-        .setColor(0x2ecc71);
-
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`delete_ticket_${channel.id}`)
-          .setLabel('Delete Ticket')
-          .setStyle(ButtonStyle.Danger)
-      );
-
-      await channel.send({ embeds: [embed], components: [row] });
-
-      // Ping user and viewer role
-      let pingMsg = `${user}`;
-      if (ticketData.viewerRole) {
-        pingMsg += ` <@&${ticketData.viewerRole}>`;
-      }
-      await channel.send(pingMsg);
-
-      await interaction.reply({
-        content: `✅ Ticket created: ${channel}`,
-        ephemeral: true
-      });
-    } catch (error) {
-      console.error(error);
-      await interaction.reply({
-        content: '❌ Failed to create ticket!',
-        ephemeral: true
-      });
-    }
-  }
-
-  // Delete ticket handling
-  if (interaction.customId.startsWith('delete_ticket_')) {
-    const channelId = interaction.customId.slice(14);
-    const channel = await client.channels.fetch(channelId);
-    const member = interaction.member;
-
-    if (!channel || channel.type !== ChannelType.GuildText) {
-      return interaction.reply({
-        content: '❌ Channel not found!',
-        ephemeral: true
-      });
-    }
-
-    // Check permissions
-    const hasPermission = member.permissions.has('ManageChannels') || 
-                         (ticketData.viewerRole && member.roles.cache.has(ticketData.viewerRole));
-
-    if (!hasPermission) {
-      return interaction.reply({
-        content: '❌ You don\'t have permission to delete this ticket!',
-        ephemeral: true
-      });
-    }
-
-    // Create transcript
-    const messages = await channel.messages.fetch({ limit: 100 });
-    const transcript = messages.reverse().map(msg => `${msg.author.tag}: ${msg.content}`).join('\n');
-
-    // Send to user's DMs
-    try {
-      const dmChannel = await interaction.user.createDM();
-      await dmChannel.send({
-        content: '**Ticket Transcript**',
-        files: [{
-          attachment: Buffer.from(transcript),
-          name: 'ticket-transcript.txt'
-        }]
-      });
-    } catch (error) {
-      console.error('Could not send DM:', error);
-    }
-
-    // Delete channel
-    await channel.delete();
-    await interaction.reply({
-      content: '✅ Ticket deleted!',
-      ephemeral: true
-    });
-  }
 });
 
+process.on('unhandledRejection', err => console.error(err));
 client.login(process.env.DISCORD_TOKEN);
