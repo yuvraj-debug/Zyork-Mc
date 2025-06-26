@@ -86,42 +86,23 @@ function saveData(data) {
 let { logChannelId, ticketSetup, appQuestions, appOptions, userLastApplied } = loadData();
 const activeApplications = new Map();
 
-// Track last command execution to prevent duplicates
-const commandCooldowns = new Map();
-
 client.once('ready', () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
   console.log(`🛠️ Serving ${client.guilds.cache.size} guilds`);
 });
 
-// Helper function to check for duplicate commands
-function isDuplicateCommand(message) {
-  const now = Date.now();
-  const key = `${message.author.id}_${message.content}`;
-  
-  if (commandCooldowns.has(key)) {
-    const lastTime = commandCooldowns.get(key);
-    if (now - lastTime < 1000) { // 1 second cooldown
-      return true;
-    }
-  }
-  
-  commandCooldowns.set(key, now);
-  return false;
-}
-
-// Command handler
+// Command handler with single response guarantee
 client.on('messageCreate', async message => {
   if (message.author.bot || !message.guild) return;
-  
-  // Check for duplicate command
-  if (isDuplicateCommand(message)) return;
   
   const content = message.content.trim();
   const lc = content.toLowerCase();
 
   try {
     if (lc === '!help') {
+      // Delete the command message to prevent duplicate processing
+      await message.delete().catch(() => {});
+      
       const embed = new EmbedBuilder()
         .setTitle('📘 Bot Commands')
         .setColor('Blue')
@@ -314,11 +295,12 @@ client.on('messageCreate', async message => {
   }
 });
 
-// Interaction handler (same as previous version)
+// Fixed Interaction Handler
 client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isStringSelectMenu() && !interaction.isButton()) return;
 
   try {
+    // Ticket selection handler
     if (interaction.customId === 'ticket_select') {
       await interaction.deferReply({ ephemeral: true });
       
@@ -334,7 +316,8 @@ client.on(Events.InteractionCreate, async interaction => {
       
       if (existingTicket) {
         return interaction.editReply({ 
-          content: `❗ You already have a ticket: ${existingTicket}` 
+          content: `❗ You already have a ticket: ${existingTicket}`,
+          ephemeral: true
         });
       }
 
@@ -344,11 +327,25 @@ client.on(Events.InteractionCreate, async interaction => {
         type: ChannelType.GuildText,
         parent: ticketSetup.categoryId || null,
         permissionOverwrites: [
-          { id: guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
-          { id: user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
+          { 
+            id: guild.id, 
+            deny: [PermissionsBitField.Flags.ViewChannel] 
+          },
+          { 
+            id: user.id, 
+            allow: [
+              PermissionsBitField.Flags.ViewChannel, 
+              PermissionsBitField.Flags.SendMessages,
+              PermissionsBitField.Flags.AttachFiles,
+              PermissionsBitField.Flags.EmbedLinks
+            ] 
+          },
           ...(ticketSetup.viewerRoleId ? [{ 
             id: ticketSetup.viewerRoleId, 
-            allow: [PermissionsBitField.Flags.ViewChannel] 
+            allow: [
+              PermissionsBitField.Flags.ViewChannel,
+              PermissionsBitField.Flags.SendMessages
+            ] 
           }] : [])
         ]
       });
@@ -368,10 +365,12 @@ client.on(Events.InteractionCreate, async interaction => {
       });
       
       return interaction.editReply({ 
-        content: `✅ Ticket created: ${ch}` 
+        content: `✅ Ticket created: ${ch}`,
+        ephemeral: true
       });
     }
 
+    // Ticket close handler
     if (interaction.customId === 'close_ticket') {
       await interaction.deferReply({ ephemeral: true });
       
@@ -396,6 +395,10 @@ client.on(Events.InteractionCreate, async interaction => {
         });
       } catch (err) {
         console.error('Failed to send transcript:', err);
+        await interaction.followUp({
+          content: "⚠️ Couldn't DM you the transcript. Make sure your DMs are open!",
+          ephemeral: true
+        });
       }
       
       // Notify and delete channel
@@ -406,6 +409,7 @@ client.on(Events.InteractionCreate, async interaction => {
       setTimeout(() => ch.delete().catch(console.error), 2000);
     }
 
+    // Application selection handler
     if (interaction.customId === 'app_select') {
       await interaction.deferReply({ ephemeral: true });
       
@@ -415,7 +419,8 @@ client.on(Events.InteractionCreate, async interaction => {
       
       if (!opt) {
         return interaction.editReply({ 
-          content: '❌ Invalid option selected.' 
+          content: '❌ Invalid option selected.',
+          ephemeral: true
         });
       }
 
@@ -429,7 +434,8 @@ client.on(Events.InteractionCreate, async interaction => {
         const rem = cooldown - (now - last);
         const days = Math.ceil(rem / (24 * 60 * 60 * 1000));
         return interaction.editReply({ 
-          content: `⏳ You must wait **${days}** more day(s) before reapplying for ${opt.label}.` 
+          content: `⏳ You must wait **${days}** more day(s) before reapplying for ${opt.label}.`,
+          ephemeral: true
         });
       }
 
@@ -438,7 +444,8 @@ client.on(Events.InteractionCreate, async interaction => {
       saveData({ logChannelId, ticketSetup, appQuestions, appOptions, userLastApplied });
       
       await interaction.editReply({ 
-        content: '📩 Check your DMs to complete the application!' 
+        content: '📩 Check your DMs to complete the application!',
+        ephemeral: true
       });
       
       const dm = await user.createDM();
@@ -451,7 +458,12 @@ client.on(Events.InteractionCreate, async interaction => {
           .setTitle(`📋 Application for ${opt.label}`)
           .setDescription(`Question 1/${appQuestions.length}\n\n${appQuestions[currentQuestion]}`)
           .setColor('Blue')
-      ] });
+      ] }).catch(() => {
+        return interaction.followUp({
+          content: "⚠️ Couldn't DM you. Please enable DMs and try again!",
+          ephemeral: true
+        });
+      });
       
       // Set up collector for answers
       const collector = dm.createMessageCollector({ 
@@ -522,7 +534,8 @@ client.on(Events.InteractionCreate, async interaction => {
     console.error('Interaction error:', error);
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply({ 
-        content: '❌ An error occurred while processing your request.' 
+        content: '❌ An error occurred while processing your request.',
+        ephemeral: true
       }).catch(console.error);
     } else {
       await interaction.reply({ 
