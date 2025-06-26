@@ -25,41 +25,48 @@ const client = new Client({
 // Data Storage
 const guildData = new Map();
 
-// Initialize Guild Data
 const initGuildData = (guildId) => {
   if (!guildData.has(guildId)) {
     guildData.set(guildId, {
+      // Ticket System
       tickets: {
-        message: "",
+        panelMessage: "",
         options: [],
-        supportRole: null,
-        category: null
+        supportRoleId: null,
+        categoryId: null,
+        activeTickets: new Map()
       },
+      
+      // Application System
       applications: {
         questions: [],
         options: {},
-        logChannel: null,
-        cooldowns: new Map()
+        logChannelId: null,
+        cooldowns: new Map(),
+        activeApps: new Set()
       },
+      
+      // Games
       games: {
-        guessNumber: Math.floor(Math.random() * 100) + 1
-      }
+        currentGuess: Math.floor(Math.random() * 100) + 1,
+        triviaQuestions: [
+          { question: "What is the capital of France?", answer: "paris", difficulty: "Easy" },
+          { question: "Which planet is known as the Red Planet?", answer: "mars", difficulty: "Easy" },
+          { question: "What is 2+2*2?", answer: "6", difficulty: "Medium" },
+          { question: "What is the largest mammal?", answer: "blue whale", difficulty: "Easy" },
+          { question: "How many continents are there?", answer: "7", difficulty: "Easy" },
+          { question: "What is the main ingredient in guacamole?", answer: "avocado", difficulty: "Easy" },
+          { question: "Which language is used for web development?", answer: "javascript", difficulty: "Medium" }
+        ],
+        scrambleWords: ["banana", "elephant", "javascript", "discord", "developer", "pineapple", "watermelon"]
+      },
+      
+      // User States
+      userStates: new Map()
     });
   }
   return guildData.get(guildId);
 };
-
-// Trivia Questions
-const triviaQuestions = [
-  { question: "What is the capital of France?", answer: "paris", difficulty: "Easy" },
-  { question: "How many continents are there?", answer: "7", difficulty: "Easy" },
-  { question: "What is the largest planet in our solar system?", answer: "jupiter", difficulty: "Medium" },
-  { question: "Which language is used for web development?", answer: "javascript", difficulty: "Medium" },
-  { question: "What is 2+2*2?", answer: "6", difficulty: "Easy" }
-];
-
-// Scramble Words
-const scrambleWords = ["apple", "banana", "orange", "grapes", "watermelon"];
 
 // Helper Functions
 const createEmbed = (title, description, color = "#5865F2") => {
@@ -78,6 +85,7 @@ client.on('ready', () => {
   console.log(`✅ Bot is online as ${client.user.tag}`);
 });
 
+// Command Handler
 client.on('messageCreate', async (message) => {
   if (message.author.bot || !message.guild) return;
 
@@ -91,20 +99,20 @@ client.on('messageCreate', async (message) => {
     const embed = createEmbed(
       "🤖 Bot Commands Help",
       `
-      **🎟️ Ticket System**
+      **🎟️ TICKET SYSTEM**
       \`!ticket <message>\` - Set ticket panel message
       \`!addoption <emoji> <name>\` - Add ticket option
       \`!setsupport @role\` - Set support role
       \`!setcategory #channel\` - Set ticket category
       \`!deploypanel\` - Create ticket panel
 
-      **📝 Applications**
+      **📝 APPLICATIONS**
       \`!addquestion <text>\` - Add application question
-      \`!setappoptions name|cooldown,...\` - Configure applications
+      \`!setoptions name|cooldown,...\` - Configure applications
       \`!setlogchannel #channel\` - Set application logs
       \`!deployapp\` - Create application menu
 
-      **🎮 Games**
+      **🎮 GAMES**
       \`!guess <number>\` - Guess a number (1-100)
       \`!trivia\` - Answer a trivia question
       \`!scramble\` - Unscramble the word
@@ -115,9 +123,9 @@ client.on('messageCreate', async (message) => {
     return channel.send({ embeds: [embed] });
   }
 
-  // Ticket System
+  // Ticket System Commands
   if (command === "!ticket" && args.length) {
-    data.tickets.message = args.join(" ");
+    data.tickets.panelMessage = args.join(" ");
     return channel.send(createEmbed("✅ Success", "Ticket message set!", "#57F287"));
   }
 
@@ -130,14 +138,14 @@ client.on('messageCreate', async (message) => {
   }
 
   if (command === "!setsupport" && message.mentions.roles.first()) {
-    data.tickets.supportRole = message.mentions.roles.first().id;
+    data.tickets.supportRoleId = message.mentions.roles.first().id;
     return channel.send(createEmbed("✅ Success", "Support role set!", "#57F287"));
   }
 
   if (command === "!setcategory" && message.mentions.channels.first()) {
     const targetChannel = message.mentions.channels.first();
     if (targetChannel.parent) {
-      data.tickets.category = targetChannel.parentId;
+      data.tickets.categoryId = targetChannel.parentId;
       return channel.send(createEmbed("✅ Success", `Ticket category set to ${targetChannel.parent.name}`, "#57F287"));
     }
     return channel.send(createEmbed("❌ Error", "Channel must be in a category", "#ED4245"));
@@ -148,7 +156,7 @@ client.on('messageCreate', async (message) => {
       return channel.send(createEmbed("❌ Error", "Add options first with !addoption", "#ED4245"));
     }
 
-    const embed = createEmbed("🎟️ Create Ticket", data.tickets.message || "Select a ticket type below");
+    const embed = createEmbed("🎟️ Create Ticket", data.tickets.panelMessage || "Select a ticket type below");
     const menu = new StringSelectMenuBuilder()
       .setCustomId("create_ticket")
       .setPlaceholder("Select ticket type")
@@ -162,13 +170,13 @@ client.on('messageCreate', async (message) => {
     return channel.send({ embeds: [embed], components: [row] });
   }
 
-  // Application System
+  // Application System Commands
   if (command === "!addquestion" && args.length) {
     data.applications.questions.push(args.join(" "));
     return channel.send(createEmbed("✅ Success", "Question added to application!", "#57F287"));
   }
 
-  if (command === "!setappoptions" && args.length) {
+  if (command === "!setoptions" && args.length) {
     data.applications.options = {};
     args.join(" ").split(",").forEach(option => {
       const [name, cooldown] = option.split("|").map(x => x.trim());
@@ -178,7 +186,7 @@ client.on('messageCreate', async (message) => {
   }
 
   if (command === "!setlogchannel" && message.mentions.channels.first()) {
-    data.applications.logChannel = message.mentions.channels.first().id;
+    data.applications.logChannelId = message.mentions.channels.first().id;
     return channel.send(createEmbed("✅ Success", "Log channel set for applications!", "#57F287"));
   }
 
@@ -202,48 +210,46 @@ client.on('messageCreate', async (message) => {
     return channel.send({ embeds: [embed], components: [row] });
   }
 
-  // Games
+  // Game Commands
   if (command === "!guess" && args[0]) {
     const guess = parseInt(args[0]);
-    if (isNaN(guess)) return channel.send(createEmbed("❌ Error", "Please enter a valid number", "#ED4245"));
+    if (isNaN(guess)) {
+      return channel.send(createEmbed("❌ Error", "Please enter a valid number", "#ED4245"));
+    }
 
-    if (guess === data.games.guessNumber) {
-      data.games.guessNumber = Math.floor(Math.random() * 100) + 1;
-      return channel.send(createEmbed("🎉 Correct!", `The number was ${guess}`, "#57F287"));
+    if (guess === data.games.currentGuess) {
+      data.games.currentGuess = Math.floor(Math.random() * 100) + 1;
+      return channel.send(createEmbed("🎉 Correct!", `The number was ${guess}!`, "#57F287"));
     }
     
-    const hint = guess < data.games.guessNumber ? "🔼 Too low!" : "🔽 Too high!";
+    const hint = guess < data.games.currentGuess ? "🔼 Too low!" : "🔽 Too high!";
     return channel.send(createEmbed(hint, "Try guessing again!"));
   }
 
   if (command === "!trivia") {
-    const question = triviaQuestions[Math.floor(Math.random() * triviaQuestions.length)];
+    const question = data.games.triviaQuestions[
+      Math.floor(Math.random() * data.games.triviaQuestions.length)
+    ];
     const embed = createEmbed(
       "🧠 Trivia Question", 
       `${question.question}\n\n*Difficulty: ${question.difficulty}*`
     );
     
-    const state = {
-      type: "trivia",
-      answer: question.answer,
-      timestamp: Date.now()
-    };
+    if (!data.userStates.has(author.id)) data.userStates.set(author.id, {});
+    data.userStates.get(author.id).trivia = question.answer;
     
-    guildData.get(guild.id).currentGame = state;
     return channel.send({ embeds: [embed] });
   }
 
   if (command === "!scramble") {
-    const word = scrambleWords[Math.floor(Math.random() * scrambleWords.length)];
+    const word = data.games.scrambleWords[
+      Math.floor(Math.random() * data.games.scrambleWords.length)
+    ];
     const scrambled = scrambleWord(word);
     
-    const state = {
-      type: "scramble",
-      answer: word,
-      timestamp: Date.now()
-    };
+    if (!data.userStates.has(author.id)) data.userStates.set(author.id, {});
+    data.userStates.get(author.id).scramble = word;
     
-    guildData.get(guild.id).currentGame = state;
     return channel.send(createEmbed("🔤 Word Scramble", `Unscramble this word: **${scrambled}**`));
   }
 
@@ -271,29 +277,25 @@ client.on('messageCreate', async (message) => {
     ));
   }
 
-  // Game Answer Handling
-  if (guildData.get(guild.id)?.currentGame) {
-    const game = guildData.get(guild.id).currentGame;
+  // Handle Game Answers
+  if (data.userStates.has(author.id)) {
+    const userState = data.userStates.get(author.id);
     
     // Trivia Answer
-    if (game.type === "trivia" && Date.now() - game.timestamp < 30000) {
-      if (content.toLowerCase() === game.answer) {
-        guildData.get(guild.id).currentGame = null;
-        return channel.send(createEmbed("✅ Correct!", `The answer was **${game.answer}**`, "#57F287"));
-      }
+    if (userState.trivia && content.toLowerCase() === userState.trivia) {
+      data.userStates.delete(author.id);
+      return channel.send(createEmbed("✅ Correct!", `The answer was **${userState.trivia}**`, "#57F287"));
     }
     
     // Scramble Answer
-    if (game.type === "scramble" && Date.now() - game.timestamp < 30000) {
-      if (content.toLowerCase() === game.answer) {
-        guildData.get(guild.id).currentGame = null;
-        return channel.send(createEmbed("✅ Correct!", `The word was **${game.answer}**`, "#57F287"));
-      }
+    if (userState.scramble && content.toLowerCase() === userState.scramble) {
+      data.userStates.delete(author.id);
+      return channel.send(createEmbed("✅ Correct!", `The word was **${userState.scramble}**`, "#57F287"));
     }
   }
 });
 
-// Interactions
+// Interaction Handling
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.guild) return;
   const data = initGuildData(interaction.guild.id);
@@ -303,26 +305,40 @@ client.on('interactionCreate', async (interaction) => {
     const optionIndex = parseInt(interaction.values[0].split("_")[1]);
     const option = data.tickets.options[optionIndex];
     
-    if (!option || !data.tickets.supportRole || !data.tickets.category) {
+    if (!option || !data.tickets.supportRoleId || !data.tickets.categoryId) {
       return interaction.reply({ 
         content: "❌ Ticket system not configured properly", 
         ephemeral: true 
       });
     }
 
-    const ticketName = `ticket-${interaction.user.username.toLowerCase().slice(0, 10)}-${Date.now().toString().slice(-4)}`;
-    
+    // Check for existing ticket
+    if (data.tickets.activeTickets.has(interaction.user.id)) {
+      const existingTicket = await interaction.guild.channels.fetch(
+        data.tickets.activeTickets.get(interaction.user.id)
+      ).catch(() => null);
+      
+      if (existingTicket) {
+        return interaction.reply({ 
+          content: `❌ You already have an open ticket: ${existingTicket}`, 
+          ephemeral: true 
+        });
+      }
+    }
+
     try {
       const ticketChannel = await interaction.guild.channels.create({
-        name: ticketName,
+        name: `ticket-${interaction.user.username.toLowerCase().slice(0, 10)}-${Date.now().toString().slice(-4)}`,
         type: ChannelType.GuildText,
-        parent: data.tickets.category,
+        parent: data.tickets.categoryId,
         permissionOverwrites: [
           { id: interaction.guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
           { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel] },
-          { id: data.tickets.supportRole, allow: [PermissionsBitField.Flags.ViewChannel] }
+          { id: data.tickets.supportRoleId, allow: [PermissionsBitField.Flags.ViewChannel] }
         ]
       });
+
+      data.tickets.activeTickets.set(interaction.user.id, ticketChannel.id);
 
       const embed = createEmbed(
         `🎟️ ${option.label} Ticket`,
@@ -337,17 +353,17 @@ client.on('interactionCreate', async (interaction) => {
       );
 
       await ticketChannel.send({ 
-        content: `${interaction.user} <@&${data.tickets.supportRole}>`, 
+        content: `${interaction.user} <@&${data.tickets.supportRoleId}>`, 
         embeds: [embed], 
         components: [closeButton] 
       });
 
       return interaction.reply({ 
-        content: `✅ Ticket created: <#${ticketChannel.id}>`, 
+        content: `✅ Ticket created: ${ticketChannel}`, 
         ephemeral: true 
       });
     } catch (error) {
-      console.error(error);
+      console.error("Ticket creation error:", error);
       return interaction.reply({ 
         content: "❌ Failed to create ticket", 
         ephemeral: true 
@@ -355,7 +371,7 @@ client.on('interactionCreate', async (interaction) => {
     }
   }
 
-  // Close Ticket
+  // Ticket Closing
   if (interaction.isButton() && interaction.customId === "close_ticket") {
     if (!interaction.channel.name.startsWith("ticket-")) return;
     
@@ -363,19 +379,22 @@ client.on('interactionCreate', async (interaction) => {
       await interaction.deferUpdate();
       
       // Create transcript
-      const messages = await interaction.channel.messages.fetch({ limit: 100 });
-      const transcript = messages.reverse().map(msg => {
-        return `${msg.author.tag} [${msg.createdAt.toLocaleString()}]: ${msg.content}`;
-      }).join('\n');
+      const transcript = await interaction.channel.messages.fetch()
+        .then(messages => {
+          return messages.reverse().map(msg => {
+            return `[${msg.createdAt.toLocaleString()}] ${msg.author.tag}: ${msg.content}`;
+          }).join('\n');
+        });
       
       // Send to user
-      const file = new AttachmentBuilder(Buffer.from(transcript), { name: 'transcript.txt' });
+      const file = new AttachmentBuilder(Buffer.from(transcript), { name: 'ticket_transcript.txt' });
       await interaction.user.send({ 
         content: "Here's your ticket transcript:", 
         files: [file] 
       }).catch(() => {});
       
-      // Delete channel
+      // Delete channel and clean up
+      data.tickets.activeTickets.delete(interaction.user.id);
       await interaction.channel.delete();
     } catch (error) {
       console.error("Error closing ticket:", error);
@@ -389,18 +408,29 @@ client.on('interactionCreate', async (interaction) => {
     
     // Check cooldown
     if (appData.cooldowns.has(appType) && appData.cooldowns.get(appType).has(interaction.user.id)) {
-      const remaining = (appData.cooldowns.get(appType).get(interaction.user.id) - Date.now()) / 1000;
+      const remaining = Math.ceil(
+        (appData.cooldowns.get(appType).get(interaction.user.id) - Date.now()) / 1000
+      );
       if (remaining > 0) {
         return interaction.reply({
-          content: `⏳ You're on cooldown! Try again in ${Math.ceil(remaining)} seconds.`,
+          content: `⏳ You're on cooldown! Try again in ${remaining} seconds.`,
           ephemeral: true
         });
       }
     }
     
+    // Check for active application
+    if (appData.activeApps.has(interaction.user.id)) {
+      return interaction.reply({
+        content: "❌ You already have an active application",
+        ephemeral: true
+      });
+    }
+    
     try {
       // Start DM application
       const dmChannel = await interaction.user.createDM();
+      appData.activeApps.add(interaction.user.id);
       
       await interaction.reply({ 
         content: "Check your DMs to continue the application!", 
@@ -415,8 +445,11 @@ client.on('interactionCreate', async (interaction) => {
       
       // Process questions
       const responses = [];
-      for (const question of appData.questions) {
-        await dmChannel.send(createEmbed("Question", question));
+      for (const [index, question] of appData.questions.entries()) {
+        await dmChannel.send(createEmbed(
+          `Question ${index + 1}/${appData.questions.length}`,
+          question
+        ));
         
         try {
           const collected = await dmChannel.awaitMessages({
@@ -427,11 +460,13 @@ client.on('interactionCreate', async (interaction) => {
           
           const response = collected.first().content;
           if (response.toLowerCase() === "cancel") {
-            return dmChannel.send(createEmbed("❌ Cancelled", "Application cancelled."));
+            await dmChannel.send(createEmbed("❌ Cancelled", "Application cancelled."));
+            return;
           }
           responses.push(response);
         } catch {
-          return dmChannel.send(createEmbed("⏰ Timeout", "Application cancelled due to inactivity."));
+          await dmChannel.send(createEmbed("⏰ Timeout", "Application cancelled due to inactivity."));
+          return;
         }
       }
       
@@ -451,13 +486,13 @@ client.on('interactionCreate', async (interaction) => {
       }
       
       // Log to channel
-      if (appData.logChannel) {
-        const logChannel = await client.channels.fetch(appData.logChannel);
+      if (appData.logChannelId) {
+        const logChannel = await client.channels.fetch(appData.logChannelId);
         if (logChannel) {
           const logEmbed = createEmbed(
             `📄 New ${appType} Application`,
             `**User:** ${interaction.user.tag}\n\n**Responses:**\n${
-              appData.questions.map((q, i) => `**${i+1}.** ${q}\n> ${responses[i]}`).join('\n\n')
+              appData.questions.map((q, i) => `**${i + 1}.** ${q}\n> ${responses[i]}`).join('\n\n')
             }`
           );
           await logChannel.send({ embeds: [logEmbed] });
@@ -469,6 +504,8 @@ client.on('interactionCreate', async (interaction) => {
         content: "❌ Couldn't start application. Please enable DMs!", 
         ephemeral: true 
       });
+    } finally {
+      appData.activeApps.delete(interaction.user.id);
     }
   }
 });
