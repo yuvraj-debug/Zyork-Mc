@@ -61,12 +61,15 @@ client.on('messageCreate', async message => {
 
   // Check command cooldown
   const now = Date.now();
-  const cooldownKey = `${message.author.id}_${lc.split(' ')[0]}`;
-  if (commandCooldowns.has(cooldownKey)) {
-    const lastTime = commandCooldowns.get(cooldownKey);
-    if (now - lastTime < 1000) return; // 1 second cooldown
-  }
+  const cooldownKey = `${message.author.id}_${message.id}`;
+  if (commandCooldowns.has(cooldownKey)) return;
   commandCooldowns.set(cooldownKey, now);
+
+  // Clean up old cooldowns
+  if (commandCooldowns.size > 1000) {
+    const oldest = Array.from(commandCooldowns.keys()).slice(0, 100);
+    oldest.forEach(key => commandCooldowns.delete(key));
+  }
 
   try {
     if (lc === '!help') {
@@ -339,13 +342,6 @@ client.on('messageCreate', async message => {
     }
   } catch (error) {
     console.error('Command error:', error);
-    message.reply({
-      embeds: [
-        new EmbedBuilder()
-          .setDescription('❌ An error occurred while processing your command.')
-          .setColor('#ED4245')
-      ]
-    }).catch(console.error);
   }
 });
 
@@ -363,7 +359,7 @@ client.on(Events.InteractionCreate, async interaction => {
       
       // Check for existing ticket
       const existingTicket = guild.channels.cache.find(ch => 
-        ch.name === `ticket-${user.username.toLowerCase()}` && 
+        ch.name.startsWith(`ticket-${user.username.toLowerCase()}`) && 
         ch.parentId === botData.ticketSetup.categoryId
       );
       
@@ -380,7 +376,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
       // Create ticket channel
       const ch = await guild.channels.create({
-        name: `ticket-${user.username.toLowerCase()}`,
+        name: `ticket-${user.username.toLowerCase()}-${Date.now().toString().slice(-4)}`,
         type: ChannelType.GuildText,
         parent: botData.ticketSetup.categoryId || null,
         permissionOverwrites: [
