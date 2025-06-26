@@ -33,9 +33,9 @@ const client = new Client({
 
 // Data storage
 const data = {
-  tickets: new Map(), // guildId -> ticket setup
-  applications: new Map(), // guildId -> application setup
-  userStates: new Map(), // userId -> game states
+  tickets: new Map(),
+  applications: new Map(),
+  userStates: new Map(),
   gameData: {
     guessNumber: Math.floor(Math.random() * 100) + 1,
     scrambleWords: ['banana', 'elephant', 'discord', 'javascript', 'pirate'],
@@ -49,6 +49,7 @@ const data = {
 
 // Utility functions
 const scramble = word => word.split('').sort(() => 0.5 - Math.random()).join('');
+
 const getGuildData = (guildId, type) => {
   if (!data[type].has(guildId)) {
     data[type].set(guildId, type === 'tickets' ? {
@@ -78,7 +79,6 @@ client.on('messageCreate', async message => {
   const raw = content.trim();
   const lc = raw.toLowerCase();
 
-  // Initialize user state if needed
   if (!data.userStates.has(uid)) data.userStates.set(uid, {});
   const state = data.userStates.get(uid);
 
@@ -179,7 +179,6 @@ client.on('messageCreate', async message => {
     }
     const setup = getGuildData(guild.id, 'tickets');
     
-    // Validate setup
     if (!setup.description) {
       return message.reply('❌ Please set a ticket message first using `!ticket <message>`');
     }
@@ -199,9 +198,7 @@ client.on('messageCreate', async message => {
         .setDescription(setup.description)
         .setColor('Blue');
       
-      if (setup.footerImage) {
-        embed.setImage(setup.footerImage);
-      }
+      if (setup.footerImage) embed.setImage(setup.footerImage);
 
       const menu = new StringSelectMenuBuilder()
         .setCustomId('ticket_select')
@@ -215,18 +212,12 @@ client.on('messageCreate', async message => {
 
       const row = new ActionRowBuilder().addComponents(menu);
       
-      await message.channel.send({ 
-        embeds: [embed], 
-        components: [row] 
-      });
-      
-      // Delete the command message
+      await message.channel.send({ embeds: [embed], components: [row] });
       await message.delete().catch(() => {});
       
       return message.channel.send('✅ Ticket panel deployed successfully!').then(msg => {
         setTimeout(() => msg.delete(), 5000);
       });
-      
     } catch (error) {
       console.error('Error deploying ticket panel:', error);
       return message.reply('❌ Failed to deploy ticket panel. Please check console for errors.');
@@ -408,7 +399,6 @@ client.on('interactionCreate', async interaction => {
     const opt = setup.options[idx];
     const user = interaction.user;
 
-    // Check for existing ticket
     const existing = interaction.guild.channels.cache.find(c =>
       c.name.startsWith(`ticket-${user.username.toLowerCase()}`)
     );
@@ -419,7 +409,6 @@ client.on('interactionCreate', async interaction => {
       });
     }
 
-    // Create ticket channel
     const name = `ticket-${user.username.toLowerCase().replace(/\s+/g, '-')}-${Date.now().toString().slice(-4)}`;
     const ch = await interaction.guild.channels.create({
       name,
@@ -449,7 +438,6 @@ client.on('interactionCreate', async interaction => {
       ]
     });
 
-    // Send ticket message
     await ch.send({ 
       content: `🎫 <@${user.id}> opened **${opt.label}** ticket. <@&${setup.viewerRoleId}>`, 
       allowedMentions: { 
@@ -458,7 +446,6 @@ client.on('interactionCreate', async interaction => {
       } 
     });
 
-    // Add delete button
     const delBtn = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId('ticket_delete')
@@ -481,7 +468,6 @@ client.on('interactionCreate', async interaction => {
     const ch = interaction.channel;
     if (!ch.name.startsWith('ticket-')) return;
 
-    // Check permissions
     const hasPermission = interaction.member.permissions.has(PermissionsBitField.Flags.ManageChannels) || 
                          interaction.member.roles.cache.has(getGuildData(interaction.guild.id, 'tickets').viewerRoleId);
     if (!hasPermission) {
@@ -493,7 +479,6 @@ client.on('interactionCreate', async interaction => {
 
     await interaction.reply({ content: '🗂️ Generating transcript...', ephemeral: true });
 
-    // Create transcript
     const msgs = await ch.messages.fetch({ limit: 100 });
     const transcript = [...msgs.values()]
       .reverse()
@@ -502,10 +487,9 @@ client.on('interactionCreate', async interaction => {
 
     const file = new AttachmentBuilder(Buffer.from(transcript), { name: 'transcript.txt' });
 
-    // Send to ticket creator
     const uname = ch.name.split('-')[1];
     const member = interaction.guild.members.cache.find(m => 
-      m.user.username.toLowerCase().startsWith(uname))
+      m.user.username.toLowerCase().startsWith(uname)
     );
     if (member) {
       member.send({ 
@@ -514,7 +498,6 @@ client.on('interactionCreate', async interaction => {
       }).catch(() => {});
     }
 
-    // Delete channel after delay
     setTimeout(() => ch.delete().catch(() => {}), 3000);
   }
 
@@ -524,7 +507,6 @@ client.on('interactionCreate', async interaction => {
     const option = interaction.customId.slice(4);
     const userId = interaction.user.id;
 
-    // Check cooldown
     if (app.cooldowns.has(option) && app.cooldowns.get(option).has(userId)) {
       const remaining = app.cooldowns.get(option).get(userId) - Date.now();
       if (remaining > 0) {
@@ -535,7 +517,6 @@ client.on('interactionCreate', async interaction => {
       }
     }
 
-    // Check for active application
     const userState = data.userStates.get(userId) || {};
     if (userState.applicationActive) {
       return interaction.reply({
@@ -576,11 +557,9 @@ client.on('interactionCreate', async interaction => {
         }
       }
 
-      // Application completed
       userState.applicationActive = false;
       data.userStates.set(userId, userState);
 
-      // Set cooldown
       const cooldown = app.options[option] || 0;
       if (cooldown > 0) {
         if (!app.cooldowns.has(option)) {
@@ -589,7 +568,6 @@ client.on('interactionCreate', async interaction => {
         app.cooldowns.get(option).set(userId, Date.now() + cooldown * 1000);
       }
 
-      // Send to log channel
       if (app.channelId) {
         const logChannel = await client.channels.fetch(app.channelId);
         if (logChannel) {
