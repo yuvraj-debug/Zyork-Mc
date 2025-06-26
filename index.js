@@ -1,7 +1,5 @@
 require('dotenv').config();
 const express = require('express');
-const fs = require('fs');
-const path = require('path');
 const {
   Client,
   GatewayIntentBits,
@@ -32,77 +30,47 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
-// Data storage
-const dataPath = path.join(__dirname, 'bot_data.json');
+// In-memory data storage
+let botData = {
+  logChannelId: null,
+  ticketSetup: {
+    description: '',
+    options: [],
+    viewerRoleId: null,
+    categoryId: null
+  },
+  appQuestions: [],
+  appOptions: [],
+  userLastApplied: new Map()
+};
 
-// Load data from file
-function loadData() {
-  try {
-    if (fs.existsSync(dataPath)) {
-      const data = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
-      return {
-        logChannelId: data.logChannelId || null,
-        ticketSetup: data.ticketSetup || {
-          description: '',
-          options: [],
-          viewerRoleId: null,
-          categoryId: null
-        },
-        appQuestions: data.appQuestions || [],
-        appOptions: data.appOptions || [],
-        userLastApplied: new Map(data.userLastApplied || [])
-      };
-    }
-  } catch (err) {
-    console.error('Error loading data:', err);
-  }
-  return {
-    logChannelId: null,
-    ticketSetup: {
-      description: '',
-      options: [],
-      viewerRoleId: null,
-      categoryId: null
-    },
-    appQuestions: [],
-    appOptions: [],
-    userLastApplied: new Map()
-  };
-}
-
-// Save data to file
-function saveData(data) {
-  try {
-    const dataToSave = {
-      ...data,
-      userLastApplied: Array.from(data.userLastApplied.entries())
-    };
-    fs.writeFileSync(dataPath, JSON.stringify(dataToSave, null, 2));
-  } catch (err) {
-    console.error('Error saving data:', err);
-  }
-}
-
-let { logChannelId, ticketSetup, appQuestions, appOptions, userLastApplied } = loadData();
-const activeApplications = new Map();
+// Track processed messages to prevent duplicates
+const processedMessages = new Set();
 
 client.once('ready', () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
-  console.log(`🛠️ Serving ${client.guilds.cache.size} guilds`);
+  client.user.setActivity('!help for commands');
 });
 
-// Command handler with single response guarantee
+// Command handler with duplicate prevention
 client.on('messageCreate', async message => {
   if (message.author.bot || !message.guild) return;
   
+  // Prevent duplicate processing
+  if (processedMessages.has(message.id)) return;
+  processedMessages.add(message.id);
+  
+  // Clean up old message IDs to prevent memory leaks
+  if (processedMessages.size > 1000) {
+    const oldest = Array.from(processedMessages).slice(0, 100);
+    oldest.forEach(id => processedMessages.delete(id));
+  }
+
   const content = message.content.trim();
   const lc = content.toLowerCase();
 
   try {
     if (lc === '!help') {
-      // Delete the command message to prevent duplicate processing
-      await message.delete().catch(() => {});
-      
       const embed = new EmbedBuilder()
         .setTitle('📘 Bot Commands')
         .setColor('Blue')
@@ -160,8 +128,7 @@ client.on('messageCreate', async message => {
     if (lc.startsWith('!addques ')) {
       const q = content.slice(9).trim();
       if (!q) return message.reply('Please provide a question.');
-      appQuestions.push(q);
-      saveData({ logChannelId, ticketSetup, appQuestions, appOptions, userLastApplied });
+      botData.appQuestions.push(q);
       return message.reply('✅ Question added.');
     }
 
@@ -169,11 +136,11 @@ client.on('messageCreate', async message => {
       const raw = content.slice(12).trim();
       if (!raw) return message.reply('Please provide options in format: `Option|Cooldown,...`');
       
-      appOptions = [];
+      botData.appOptions = [];
       raw.split(',').forEach(str => {
         const [label, days] = str.split('|').map(s => s.trim());
         if (label) {
-          appOptions.push({ 
+          botData.appOptions.push({ 
             label, 
             value: label.toLowerCase().replace(/\s+/g, '_'), 
             cooldown: parseInt(days) || 7 
@@ -181,25 +148,23 @@ client.on('messageCreate', async message => {
         }
       });
       
-      saveData({ logChannelId, ticketSetup, appQuestions, appOptions, userLastApplied });
-      return message.reply(`✅ ${appOptions.length} options set.`);
+      return message.reply(`✅ ${botData.appOptions.length} options set.`);
     }
 
     if (lc.startsWith('!setchannel')) {
       const ch = message.mentions.channels.first();
       if (!ch) return message.reply('Please mention a channel.');
-      logChannelId = ch.id;
-      saveData({ logChannelId, ticketSetup, appQuestions, appOptions, userLastApplied });
+      botData.logChannelId = ch.id;
       return message.reply(`✅ Log channel set to ${ch}.`);
     }
 
     if (lc === '!deploy') {
-      if (!appOptions.length) return message.reply('⚠️ Use `!setoptions` first.');
+      if (!botData.appOptions.length) return message.reply('⚠️ Use `!setoptions` first.');
 
       const menu = new StringSelectMenuBuilder()
         .setCustomId('app_select')
         .setPlaceholder('Choose a role to apply')
-        .addOptions(appOptions.map(opt => ({ 
+        .addOptions(botData.appOptions.map(opt => ({ 
           label: opt.label, 
           value: opt.value,
           description: `Cooldown: ${opt.cooldown} days`
@@ -213,10 +178,9 @@ client.on('messageCreate', async message => {
     }
 
     if (lc === '!reset') {
-      appOptions = [];
-      appQuestions = [];
-      logChannelId = null;
-      saveData({ logChannelId, ticketSetup, appQuestions, appOptions, userLastApplied });
+      botData.appOptions = [];
+      botData.appQuestions = [];
+      botData.logChannelId = null;
       return message.reply('🔄 Application data reset.');
     }
 
@@ -224,8 +188,7 @@ client.on('messageCreate', async message => {
     if (lc.startsWith('!ticket ')) {
       const desc = content.slice(8).trim();
       if (!desc) return message.reply('Please provide a ticket message.');
-      ticketSetup.description = desc;
-      saveData({ logChannelId, ticketSetup, appQuestions, appOptions, userLastApplied });
+      botData.ticketSetup.description = desc;
       return message.reply('✅ Ticket message set.');
     }
 
@@ -235,41 +198,38 @@ client.on('messageCreate', async message => {
       
       const emoji = args.shift();
       const label = args.join(' ');
-      ticketSetup.options.push({ emoji, label });
-      saveData({ logChannelId, ticketSetup, appQuestions, appOptions, userLastApplied });
+      botData.ticketSetup.options.push({ emoji, label });
       return message.reply('✅ Ticket option added.');
     }
 
     if (lc.startsWith('!ticketviewer')) {
       const match = content.match(/<@&(\d+)>/);
       if (!match) return message.reply('Please mention a role.');
-      ticketSetup.viewerRoleId = match[1];
-      saveData({ logChannelId, ticketSetup, appQuestions, appOptions, userLastApplied });
+      botData.ticketSetup.viewerRoleId = match[1];
       return message.reply('✅ Ticket viewer role set.');
     }
 
     if (lc.startsWith('!ticketcategory')) {
       const match = content.match(/<#(\d+)>/);
       if (!match) return message.reply('Please mention a category channel.');
-      ticketSetup.categoryId = match[1];
-      saveData({ logChannelId, ticketSetup, appQuestions, appOptions, userLastApplied });
+      botData.ticketSetup.categoryId = match[1];
       return message.reply('✅ Ticket category set.');
     }
 
     if (lc === '!deployticketpanel') {
-      if (!ticketSetup.description || !ticketSetup.options.length) {
+      if (!botData.ticketSetup.description || !botData.ticketSetup.options.length) {
         return message.reply('❌ Ticket setup incomplete. Set description and options first.');
       }
 
       const embed = new EmbedBuilder()
         .setTitle('🎟️ Open a Ticket')
-        .setDescription(ticketSetup.description)
+        .setDescription(botData.ticketSetup.description)
         .setColor('Blue');
 
       const menu = new StringSelectMenuBuilder()
         .setCustomId('ticket_select')
         .setPlaceholder('Choose ticket category')
-        .addOptions(ticketSetup.options.map((opt, i) => ({
+        .addOptions(botData.ticketSetup.options.map((opt, i) => ({
           label: opt.label,
           value: `ticket_${i}`,
           emoji: opt.emoji
@@ -280,13 +240,12 @@ client.on('messageCreate', async message => {
     }
 
     if (lc === '!resetticket') {
-      ticketSetup = {
+      botData.ticketSetup = {
         description: '',
         options: [],
         viewerRoleId: null,
         categoryId: null
       };
-      saveData({ logChannelId, ticketSetup, appQuestions, appOptions, userLastApplied });
       return message.reply('🎟️ Ticket settings reset.');
     }
   } catch (error) {
@@ -295,7 +254,7 @@ client.on('messageCreate', async message => {
   }
 });
 
-// Fixed Interaction Handler
+// Interaction handler
 client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isStringSelectMenu() && !interaction.isButton()) return;
 
@@ -306,12 +265,12 @@ client.on(Events.InteractionCreate, async interaction => {
       
       const { guild, user } = interaction;
       const index = parseInt(interaction.values[0].split('_')[1]);
-      const label = ticketSetup.options[index]?.label || 'ticket';
+      const label = botData.ticketSetup.options[index]?.label || 'ticket';
       
       // Check for existing ticket
       const existingTicket = guild.channels.cache.find(ch => 
         ch.name === `ticket-${user.username.toLowerCase()}` && 
-        ch.parentId === ticketSetup.categoryId
+        ch.parentId === botData.ticketSetup.categoryId
       );
       
       if (existingTicket) {
@@ -325,7 +284,7 @@ client.on(Events.InteractionCreate, async interaction => {
       const ch = await guild.channels.create({
         name: `ticket-${user.username.toLowerCase()}`,
         type: ChannelType.GuildText,
-        parent: ticketSetup.categoryId || null,
+        parent: botData.ticketSetup.categoryId || null,
         permissionOverwrites: [
           { 
             id: guild.id, 
@@ -340,8 +299,8 @@ client.on(Events.InteractionCreate, async interaction => {
               PermissionsBitField.Flags.EmbedLinks
             ] 
           },
-          ...(ticketSetup.viewerRoleId ? [{ 
-            id: ticketSetup.viewerRoleId, 
+          ...(botData.ticketSetup.viewerRoleId ? [{ 
+            id: botData.ticketSetup.viewerRoleId, 
             allow: [
               PermissionsBitField.Flags.ViewChannel,
               PermissionsBitField.Flags.SendMessages
@@ -385,13 +344,15 @@ client.on(Events.InteractionCreate, async interaction => {
         .join('\n');
       
       const fileName = `ticket-${ch.name}-${Date.now()}.txt`;
-      const file = Buffer.from(transcript, 'utf-8');
       
       // Try to send transcript to user
       try {
         await user.send({ 
           content: '📁 Here is your ticket transcript:', 
-          files: [{ attachment: file, name: fileName }] 
+          files: [{
+            attachment: Buffer.from(transcript, 'utf-8'),
+            name: fileName
+          }] 
         });
       } catch (err) {
         console.error('Failed to send transcript:', err);
@@ -415,7 +376,7 @@ client.on(Events.InteractionCreate, async interaction => {
       
       const user = interaction.user;
       const selected = interaction.values[0];
-      const opt = appOptions.find(o => o.value === selected);
+      const opt = botData.appOptions.find(o => o.value === selected);
       
       if (!opt) {
         return interaction.editReply({ 
@@ -427,7 +388,7 @@ client.on(Events.InteractionCreate, async interaction => {
       // Check cooldown
       const now = Date.now();
       const key = `${user.id}_${opt.value}`;
-      const last = userLastApplied.get(key);
+      const last = botData.userLastApplied.get(key);
       const cooldown = opt.cooldown * 24 * 60 * 60 * 1000;
       
       if (last && now - last < cooldown) {
@@ -440,8 +401,7 @@ client.on(Events.InteractionCreate, async interaction => {
       }
 
       // Start application process
-      userLastApplied.set(key, now);
-      saveData({ logChannelId, ticketSetup, appQuestions, appOptions, userLastApplied });
+      botData.userLastApplied.set(key, now);
       
       await interaction.editReply({ 
         content: '📩 Check your DMs to complete the application!',
@@ -456,7 +416,7 @@ client.on(Events.InteractionCreate, async interaction => {
       await dm.send({ embeds: [
         new EmbedBuilder()
           .setTitle(`📋 Application for ${opt.label}`)
-          .setDescription(`Question 1/${appQuestions.length}\n\n${appQuestions[currentQuestion]}`)
+          .setDescription(`Question 1/${botData.appQuestions.length}\n\n${botData.appQuestions[currentQuestion]}`)
           .setColor('Blue')
       ] }).catch(() => {
         return interaction.followUp({
@@ -469,25 +429,25 @@ client.on(Events.InteractionCreate, async interaction => {
       const collector = dm.createMessageCollector({ 
         filter: m => m.author.id === user.id, 
         time: 300000, // 5 minutes
-        max: appQuestions.length
+        max: botData.appQuestions.length
       });
       
       collector.on('collect', async msg => {
         answers.push(msg.content);
         currentQuestion++;
         
-        if (currentQuestion < appQuestions.length) {
+        if (currentQuestion < botData.appQuestions.length) {
           await dm.send({ embeds: [
             new EmbedBuilder()
-              .setTitle(`📋 Question ${currentQuestion + 1}/${appQuestions.length}`)
-              .setDescription(appQuestions[currentQuestion])
+              .setTitle(`📋 Question ${currentQuestion + 1}/${botData.appQuestions.length}`)
+              .setDescription(botData.appQuestions[currentQuestion])
               .setColor('Blue')
           ] });
         }
       });
       
       collector.on('end', async collected => {
-        if (answers.length === appQuestions.length) {
+        if (answers.length === botData.appQuestions.length) {
           // Application complete
           await dm.send({ embeds: [
             new EmbedBuilder()
@@ -497,11 +457,11 @@ client.on(Events.InteractionCreate, async interaction => {
           ] });
           
           // Log to channel if set
-          if (logChannelId) {
+          if (botData.logChannelId) {
             try {
-              const logChannel = await client.channels.fetch(logChannelId);
+              const logChannel = await client.channels.fetch(botData.logChannelId);
               const summary = answers.map((a, i) => 
-                `**Q${i + 1}:** ${appQuestions[i]}\n**A:** ${a}`
+                `**Q${i + 1}:** ${botData.appQuestions[i]}\n**A:** ${a}`
               ).join('\n\n');
               
               const logEmbed = new EmbedBuilder()
