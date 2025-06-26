@@ -68,6 +68,41 @@ const getGuildData = (guildId, type) => {
   return data[type].get(guildId);
 };
 
+// Time parsing utility
+const parseTimeToMs = (timeStr) => {
+  const timeUnits = {
+    s: 1000,         // seconds
+    m: 1000 * 60,    // minutes
+    h: 1000 * 60 * 60, // hours
+    d: 1000 * 60 * 60 * 24, // days
+    w: 1000 * 60 * 60 * 24 * 7 // weeks
+  };
+  
+  const match = timeStr.match(/^(\d+)([smhdw])$/i);
+  if (!match) return null;
+  
+  const value = parseInt(match[1]);
+  const unit = match[2].toLowerCase();
+  return value * timeUnits[unit];
+};
+
+const formatSeconds = (seconds) => {
+  if (seconds <= 0) return 'No cooldown';
+  
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = seconds % 60;
+  
+  const parts = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0) parts.push(`${hours}h`);
+  if (minutes > 0) parts.push(`${minutes}m`);
+  if (secs > 0) parts.push(`${secs}s`);
+  
+  return parts.join(' ');
+};
+
 // UI Utility Functions
 const createSuccessEmbed = (title, description) => new EmbedBuilder()
   .setTitle(`✅ ${title}`)
@@ -174,7 +209,7 @@ client.on('messageCreate', async message => {
         },
         {
           name: '`!setoptions Option|Cooldown,...`',
-          value: 'Set options with cooldown',
+          value: 'Set options with cooldown (e.g., Staff|1d, Mod|12h)',
           inline: true
         },
         {
@@ -398,14 +433,39 @@ client.on('messageCreate', async message => {
     app.options = {};
     for (const opt of optionsList) {
       if (opt.includes('|')) {
-        const [name, cooldown] = opt.split('|').map(x => x.trim());
-        app.options[name] = parseInt(cooldown) || 0;
+        const [name, cooldownStr] = opt.split('|').map(x => x.trim());
+        // Try to parse as simple number first
+        let cooldown = parseInt(cooldownStr);
+        
+        // If not a simple number, try to parse as time string (1d, 12h, etc.)
+        if (isNaN(cooldown)) {
+          const ms = parseTimeToMs(cooldownStr.toLowerCase());
+          if (ms !== null) {
+            cooldown = Math.floor(ms / 1000); // Convert to seconds
+          } else {
+            // Invalid format - default to 0
+            cooldown = 0;
+            message.channel.send({ embeds: [
+              createErrorEmbed('Invalid Cooldown', 
+                `Couldn't parse cooldown "${cooldownStr}" for option "${name}". Using 0 seconds.`)
+            ]}).then(msg => setTimeout(() => msg.delete(), 5000));
+          }
+        }
+        
+        app.options[name] = cooldown > 0 ? cooldown : 0;
       } else {
         app.options[opt] = 0;
       }
     }
+    
+    // Format the options for display
+    const formattedOptions = Object.entries(app.options).map(([name, cd]) => {
+      return `• ${name}: ${formatSeconds(cd)} cooldown`;
+    });
+    
     return message.reply({ embeds: [
-      createSuccessEmbed('Options Set', 'Application options updated successfully!')
+      createSuccessEmbed('Options Set', 
+        `Application options updated successfully!\n\n${formattedOptions.join('\n')}`)
     ]});
   }
 
@@ -448,7 +508,7 @@ client.on('messageCreate', async message => {
       row.addComponents(
         new ButtonBuilder()
           .setCustomId(`app_${option}`)
-          .setLabel(option)
+          .setLabel(`${option} (${formatSeconds(app.options[option])})`)
           .setStyle(ButtonStyle.Primary)
       );
     }
@@ -710,7 +770,7 @@ client.on('interactionCreate', async interaction => {
       if (remaining > 0) {
         return interaction.reply({
           embeds: [createErrorEmbed('Cooldown Active', 
-            `You're on cooldown for this application. Try again in ${Math.floor(remaining / 1000)} seconds.`)],
+            `You're on cooldown for this application. Try again in ${formatSeconds(Math.floor(remaining / 1000))}.`)],
           ephemeral: true
         });
       }
