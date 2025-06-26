@@ -30,27 +30,16 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
-const ticketSetup = {
+let ticketSetup = {
   description: 'Select a category to open a ticket.',
-  options: [
-    { emoji: '📩', label: 'Support' },
-    { emoji: '🛠️', label: 'Bug Report' }
-  ],
+  options: [],
   viewerRoleId: null,
   categoryId: null
 };
 
-const appQuestions = [
-  'What is your name?',
-  'Why do you want to apply?',
-  'What experience do you have?',
-  'How active can you be?'
-];
-
-const appOptions = [
-  { label: 'Staff', value: 'staff', cooldown: 7 },
-  { label: 'Developer', value: 'developer', cooldown: 14 }
-];
+let appQuestions = [];
+let appOptions = [];
+let logChannelId = null;
 
 const userStates = new Map();
 const userLastApplied = new Map();
@@ -60,24 +49,33 @@ client.once('ready', () => console.log(`🤖 Logged in as ${client.user.tag}`));
 
 client.on('messageCreate', async message => {
   if (message.author.bot) return;
-  const content = message.content.trim().toLowerCase();
+  const content = message.content.trim();
   const uid = message.author.id;
   if (!userStates.has(uid)) userStates.set(uid, {});
   const state = userStates.get(uid);
 
-  if (content === '!help') {
+  if (content.toLowerCase() === '!help') {
     return message.channel.send(`📘 **Bot Commands**
 
 🎮 **Mini‑Games**
-\`!guess <number>\` — Guess the number
-\`!trivia\` — Trivia game
-\`!scramble\` — Unscramble word
-
-🎟️ **Tickets**
-\`!deployticketpanel\` — Deploy ticket panel
+!guess <number> — Guess the number
+!trivia — Trivia game
+!scramble — Unscramble word
 
 📝 **Applications**
-\`!deploy\` — Deploy application options`);
+!addques <question> — Add application question
+!setoptions Option|Cooldown,... — Set options with cooldown
+!setchannel #channel — Set log channel
+!deploy — Deploy application menu
+!reset — Reset application data
+
+🎟️ **Tickets**
+!ticket <message> — Set ticket panel message
+!option <emoji> <label> — Add ticket option
+!ticketviewer @role — Set viewer role for tickets
+!ticketcategory #channel — Set category for tickets
+!deployticketpanel — Deploy ticket menu
+!resetticket — Reset ticket setup`);
   }
 
   if (content.startsWith('!guess ')) {
@@ -91,7 +89,7 @@ client.on('messageCreate', async message => {
     state.triviaAnswer = q.answer;
     return message.channel.send(`🧠 Trivia: ${q.question}`);
   }
-  if (state.triviaAnswer && content === state.triviaAnswer.toLowerCase()) {
+  if (state.triviaAnswer && content.toLowerCase() === state.triviaAnswer.toLowerCase()) {
     state.triviaAnswer = null;
     return message.reply('✅ Correct answer!');
   }
@@ -101,37 +99,63 @@ client.on('messageCreate', async message => {
     state.scrambleAnswer = word;
     return message.channel.send(`🔤 Unscramble: \`${scramble(word)}\``);
   }
-  if (state.scrambleAnswer && content === state.scrambleAnswer.toLowerCase()) {
+  if (state.scrambleAnswer && content.toLowerCase() === state.scrambleAnswer.toLowerCase()) {
     state.scrambleAnswer = null;
     return message.reply('✅ Correct unscramble!');
   }
 
-  if (content === '!deployticketpanel') {
-    const embed = new EmbedBuilder()
-      .setTitle('📩 Open a Ticket')
-      .setDescription(ticketSetup.description)
-      .setColor('Blue');
-
-    const menu = new StringSelectMenuBuilder()
-      .setCustomId('ticket_select')
-      .setPlaceholder('Choose a category')
-      .addOptions(ticketSetup.options.map((opt, i) => ({
-        label: opt.label,
-        value: `ticket_${i}`,
-        emoji: opt.emoji
-      })));
-
-    const row = new ActionRowBuilder().addComponents(menu);
-    return message.channel.send({ embeds: [embed], components: [row] });
+  if (content.startsWith('!addques ')) {
+    const q = content.slice(9).trim();
+    appQuestions.push(q);
+    return message.reply(`✅ Question added: "${q}"`);
   }
 
-  if (content === '!deploy') {
-    const menu = new StringSelectMenuBuilder()
-      .setCustomId('app_select')
-      .setPlaceholder('Select an application')
-      .addOptions(appOptions.map(opt => ({ label: opt.label, value: opt.value })));
-    const row = new ActionRowBuilder().addComponents(menu);
-    return message.channel.send({ content: '📥 Choose a role to apply for:', components: [row] });
+  if (content.startsWith('!setoptions ')) {
+    appOptions = content.slice(12).split(',').map(pair => {
+      const [label, days] = pair.split('|').map(s => s.trim());
+      return { label, value: label.toLowerCase().replace(/\s+/g, '_'), cooldown: parseInt(days) || 7 };
+    });
+    return message.reply('✅ Options set.');
+  }
+
+  if (content.startsWith('!setchannel')) {
+    const ch = message.mentions.channels.first();
+    if (!ch) return message.reply('❌ Mention a valid channel.');
+    logChannelId = ch.id;
+    return message.reply('📬 Log channel set.');
+  }
+
+  if (content.startsWith('!reset')) {
+    appQuestions = [];
+    appOptions = [];
+    logChannelId = null;
+    return message.reply('♻️ Application data reset.');
+  }
+
+  if (content.startsWith('!ticket ')) {
+    ticketSetup.description = content.slice(8).trim();
+    return message.reply('✅ Ticket panel message set.');
+  }
+
+  if (content.startsWith('!option ')) {
+    const [, emoji, ...labelParts] = content.split(' ');
+    const label = labelParts.join(' ');
+    ticketSetup.options.push({ emoji, label });
+    return message.reply('✅ Option added.');
+  }
+
+  if (content.startsWith('!ticketviewer')) {
+    const role = message.mentions.roles.first();
+    if (!role) return message.reply('❌ Mention a role.');
+    ticketSetup.viewerRoleId = role.id;
+    return message.reply('👁️ Viewer role set.');
+  }
+
+  if (content.startsWith('!ticketcategory')) {
+    const ch = message.mentions.channels.first();
+    if (!ch) return message.reply('❌ Mention a category channel.');
+    ticketSetup.categoryId = ch.id;
+    return message.reply('📁 Ticket category set.');
   }
 });
 
@@ -152,7 +176,8 @@ client.on(Events.InteractionCreate, async interaction => {
       parent: ticketSetup.categoryId || null,
       permissionOverwrites: [
         { id: guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
-        { id: user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] }
+        { id: user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
+        ...(ticketSetup.viewerRoleId ? [{ id: ticketSetup.viewerRoleId, allow: [PermissionsBitField.Flags.ViewChannel] }] : [])
       ]
     });
 
@@ -207,7 +232,14 @@ client.on(Events.InteractionCreate, async interaction => {
             .setTitle('✅ Application Complete')
             .setDescription(`Your application for **${option.label}** has been submitted.`)
         ] });
-        return; // prevent extra messages
+        if (logChannelId) {
+          const logCh = await client.channels.fetch(logChannelId).catch(() => null);
+          if (logCh) {
+            const summary = answers.map((a, j) => `**Q${j + 1}:** ${appQuestions[j]}\n**A:** ${a}`).join('\n\n');
+            logCh.send(`📨 Application from **${user.tag}** for **${option.label}**\n\n${summary}`);
+          }
+        }
+        return;
       }
       await dm.send({ embeds: [
         new EmbedBuilder()
