@@ -1,4 +1,4 @@
-// FINAL FULL DISCORD BOT CODE — All Working Features: Ticket, Application, Games, Fixed Permissions
+// FINAL FULL DISCORD BOT CODE — All Public Access Version (No Admin-Only Restrictions)
 require('dotenv').config();
 const fs = require('fs');
 const express = require('express');
@@ -9,8 +9,6 @@ const {
   EmbedBuilder,
   ActionRowBuilder,
   StringSelectMenuBuilder,
-  ButtonBuilder,
-  ButtonStyle,
   ChannelType,
   Events
 } = require('discord.js');
@@ -30,7 +28,6 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
-const OWNER_ID = '1202998273376522331';
 const DATA_FILE = './data.json';
 const TICKET_FILE = './ticket_data.json';
 
@@ -70,54 +67,42 @@ function getSetup(guildId) {
 }
 
 const scramble = word => word.split('').sort(() => 0.5 - Math.random()).join('');
-const isAdminOrOwner = member => member?.permissions?.has('Administrator') || member?.id === OWNER_ID;
 
 client.once('ready', () => console.log(`🤖 Logged in as ${client.user.tag}`));
 
 client.on('messageCreate', async message => {
   if (message.author.bot) return;
-  const isDM = message.channel.type === ChannelType.DM;
   const uid = message.author.id;
   const content = message.content.trim();
   const lc = content.toLowerCase();
-  const member = message.member;
 
   if (!userStates.has(uid)) userStates.set(uid, {});
   const state = userStates.get(uid);
 
-  const gameCmds = ['!guess', '!trivia', '!scramble', '!rps'];
-  const generalCmds = ['!help'];
-  const appTicketCmds = ['!addques', '!setoptions', '!setchannel', '!deploy', '!reset', '!ticket', '!option', '!resetticket', '!ticketviewer', '!ticketcategory', '!deployticketpanel', '!msg', '!dm'];
-
-  const matchedGame = gameCmds.find(c => lc.startsWith(c));
-  const matchedApp = appTicketCmds.find(c => lc.startsWith(c));
-  const isGeneral = generalCmds.includes(lc);
-
-  if (!isDM && !matchedGame && !matchedApp && !isGeneral) {
-    const inTicket = message.channel.name?.startsWith('ticket-');
-    if (!inTicket && !isAdminOrOwner(member)) {
-      return message.reply('❌ Only admins or the bot owner can use this command.');
-    }
-  }
-
-  // Public commands
   if (lc === '!help') {
     return message.channel.send(`📘 **Bot Commands**
-🎮 **Mini‑Games**
-\`!guess <number>\` — Guess number
-\`!trivia\` — Trivia question
-\`!scramble\` — Unscramble word
-\`!rps <rock|paper|scissors>\`
 
-🛠️ **Admin / Owner Only**
-🎟️ **Ticket System**
-\`!ticket <msg>\`, \`!option <emoji> <label>\`, \`!ticketviewer @role\`
-\`!ticketcategory #channel\`, \`!deployticketpanel\`, \`!resetticket\`
-📬 \`!msg <message>\`, \`!dm @role <message>\`
-📝 \`!addques <q>\`, \`!setoptions A|14,...\`, \`!setchannel #ch\`, \`!deploy\`, \`!reset\``);
+🎮 **Mini‑Games**
+\`!guess <number>\` — Guess the number
+\`!trivia\` — Trivia game
+\`!scramble\` — Unscramble word
+
+📝 **Applications**
+\`!addques <question>\` — Add application question
+\`!setoptions Option|Cooldown,...\` — Set options with cooldown
+\`!setchannel #channel\` — Set log channel
+\`!deploy\` — Deploy application menu
+\`!reset\` — Reset application data
+
+🎟️ **Tickets**
+\`!ticket <message>\` — Set ticket panel message
+\`!option <emoji> <label>\` — Add ticket option
+\`!ticketviewer @role\` — Set viewer role for tickets
+\`!ticketcategory #channel\` — Set category for tickets
+\`!deployticketpanel\` — Deploy ticket menu
+\`!resetticket\` — Reset ticket setup`);
   }
 
-  // Games
   if (lc === '!trivia') {
     const q = [
       { question: 'Capital of France?', answer: 'paris' },
@@ -130,6 +115,7 @@ client.on('messageCreate', async message => {
     state.triviaAnswer = null;
     return message.reply('✅ Correct answer!');
   }
+
   if (lc === '!scramble') {
     const word = 'discord';
     state.scrambleAnswer = word;
@@ -139,14 +125,50 @@ client.on('messageCreate', async message => {
     state.scrambleAnswer = null;
     return message.reply('✅ Correct unscramble!');
   }
+
   if (lc.startsWith('!guess ')) {
     const guess = parseInt(content.split(' ')[1]);
     const correct = 42;
     return message.reply(guess === correct ? '🎉 Correct!' : '❌ Wrong. Try again!');
   }
 
-  // Ticket commands (admins only)
-  if (matchedApp && !isAdminOrOwner(member)) return message.reply('❌ Admins only.');
+  if (lc.startsWith('!addques')) {
+    questions.push(content.slice(9));
+    saveApp();
+    return message.reply('✅ Question added.');
+  }
+
+  if (lc.startsWith('!setoptions')) {
+    options = content.slice(12).split(',').map(x => {
+      const [label, days] = x.split('|');
+      return { label, value: label.toLowerCase().replace(/\s+/g, '_'), cooldown: parseInt(days) || 14 };
+    });
+    saveApp();
+    return message.reply('✅ Options set.');
+  }
+
+  if (lc.startsWith('!setchannel')) {
+    const ch = message.mentions.channels.first();
+    if (ch) logChannelId = ch.id;
+    saveApp();
+    return message.reply('✅ Log channel set.');
+  }
+
+  if (lc === '!deploy') {
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId('app_select')
+      .addOptions(options.map(o => ({ label: o.label, value: o.value })));
+    const row = new ActionRowBuilder().addComponents(menu);
+    message.channel.send({ content: '📥 Select below to apply.', components: [row] });
+  }
+
+  if (lc === '!reset') {
+    questions = [];
+    options = [];
+    logChannelId = '';
+    saveApp();
+    message.reply('♻️ Reset done.');
+  }
 
   if (lc.startsWith('!ticket ')) {
     const setup = getSetup(message.guild.id);
@@ -154,6 +176,7 @@ client.on('messageCreate', async message => {
     saveTicketSetup();
     return message.reply('✅ Ticket message set.');
   }
+
   if (lc.startsWith('!option ')) {
     const setup = getSetup(message.guild.id);
     const args = content.slice(8).split(' ');
@@ -163,6 +186,7 @@ client.on('messageCreate', async message => {
     saveTicketSetup();
     return message.reply(`✅ Added: ${emoji} ${label}`);
   }
+
   if (lc.startsWith('!ticketviewer')) {
     const setup = getSetup(message.guild.id);
     const match = content.match(/<@&(\d+)>/);
@@ -170,6 +194,7 @@ client.on('messageCreate', async message => {
     saveTicketSetup();
     return message.reply('✅ Viewer role set.');
   }
+
   if (lc.startsWith('!ticketcategory')) {
     const setup = getSetup(message.guild.id);
     const match = content.match(/<#(\d+)>/);
@@ -180,6 +205,7 @@ client.on('messageCreate', async message => {
     saveTicketSetup();
     return message.reply('✅ Category set.');
   }
+
   if (lc === '!deployticketpanel') {
     const setup = getSetup(message.guild.id);
     const embed = new EmbedBuilder()
@@ -188,46 +214,9 @@ client.on('messageCreate', async message => {
       .setColor('Blue');
     const menu = new StringSelectMenuBuilder()
       .setCustomId('ticket_select')
-      .addOptions(setup.options.map((opt, i) => ({
-        label: opt.label, value: `ticket_${i}`, emoji: opt.emoji
-      })));
+      .addOptions(setup.options.map((opt, i) => ({ label: opt.label, value: `ticket_${i}`, emoji: opt.emoji })));
     const row = new ActionRowBuilder().addComponents(menu);
     return message.channel.send({ embeds: [embed], components: [row] });
-  }
-
-  // Application system
-  if (lc.startsWith('!addques')) {
-    questions.push(content.slice(9));
-    saveApp();
-    return message.reply('✅ Question added.');
-  }
-  if (lc.startsWith('!setoptions')) {
-    options = content.slice(12).split(',').map(x => {
-      const [label, days] = x.split('|');
-      return { label, value: label.toLowerCase().replace(/\s+/g, '_'), cooldown: parseInt(days) || 14 };
-    });
-    saveApp();
-    return message.reply('✅ Options set.');
-  }
-  if (lc.startsWith('!setchannel')) {
-    const ch = message.mentions.channels.first();
-    if (ch) logChannelId = ch.id;
-    saveApp();
-    return message.reply('✅ Log channel set.');
-  }
-  if (lc === '!deploy') {
-    const menu = new StringSelectMenuBuilder()
-      .setCustomId('app_select')
-      .addOptions(options.map(o => ({ label: o.label, value: o.value })));
-    const row = new ActionRowBuilder().addComponents(menu);
-    message.channel.send({ content: '📥 Select below to apply.', components: [row] });
-  }
-  if (lc === '!reset') {
-    questions = [];
-    options = [];
-    logChannelId = '';
-    saveApp();
-    message.reply('♻️ Reset done.');
   }
 });
 
