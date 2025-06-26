@@ -338,7 +338,7 @@ client.on('messageCreate', async message => {
       message.reply(`✅ Well done! The word was **${state.scramble.answer}**`);
       state.scramble = null;
     } else if (!state.scramble.answered) {
-      message.reply('❌ Nope, that's not it!');
+      message.reply(`❌ Nope, that's not it!`);
       state.scramble.answered = true;
     }
     return;
