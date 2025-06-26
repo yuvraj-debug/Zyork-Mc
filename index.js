@@ -1,4 +1,4 @@
-// FULL CODE — FIXED MESSAGE RESTRICTIONS, DOUBLE MESSAGES, HELP PERMISSION, DROPDOWN + TICKET ACCESS
+// FULL CODE — PERSISTENT TICKET + APPLICATION SYSTEM + ALL FIXES
 require('dotenv').config();
 const fs = require('fs');
 const express = require('express');
@@ -33,19 +33,32 @@ const client = new Client({
 });
 
 const OWNER_ID = '1202998273376522331';
-const ticketSetup = new Map();
-const userStates = new Map();
 const DATA_FILE = './data.json';
+const TICKET_FILE = './ticket_data.json';
 
 let questions = [];
 let options = [];
 let logChannelId = '';
+let ticketSetup = new Map();
+
 const userLastApplied = new Map();
+const userStates = new Map();
 
 if (fs.existsSync(DATA_FILE)) {
   const saved = JSON.parse(fs.readFileSync(DATA_FILE));
   options = saved.options || [];
   logChannelId = saved.logChannelId || '';
+  questions = saved.questions || [];
+}
+
+if (fs.existsSync(TICKET_FILE)) {
+  const raw = JSON.parse(fs.readFileSync(TICKET_FILE));
+  ticketSetup = new Map(Object.entries(raw));
+}
+
+function saveTicketSetup() {
+  const plain = Object.fromEntries(ticketSetup);
+  fs.writeFileSync(TICKET_FILE, JSON.stringify(plain, null, 2));
 }
 
 const games = {
@@ -159,38 +172,114 @@ client.on('messageCreate', async message => {
     state.scrambleAnswer = null;
     return message.reply('✅ Correct unscramble!');
   }
-});
 
-client.on(Events.InteractionCreate, async interaction => {
-  if (!interaction.isStringSelectMenu()) return;
+  if (lc === '!resetticket') {
+    ticketSetup.set(message.guild.id, { description: '', options: [], viewerRoleId: null, categoryId: null, footerImage: null });
+    saveTicketSetup();
+    return message.reply('♻️ Ticket setup reset.');
+  }
 
-  const user = interaction.user;
-  const member = await interaction.guild.members.fetch(user.id);
-  const selected = interaction.values[0];
-  const guildId = interaction.guild.id;
-  const setup = ticketSetup.get(guildId);
+  if (lc.startsWith('!ticket ')) {
+    const setup = getSetup(message.guild.id);
+    setup.description = content.slice(8);
+    const att = message.attachments.first();
+    if (att) setup.footerImage = att.url;
+    saveTicketSetup();
+    return message.reply('✅ Ticket message set.');
+  }
 
-  if (interaction.customId === 'ticket_select') {
-    const categoryId = setup?.categoryId;
-    const viewerRoleId = setup?.viewerRoleId;
-    const option = setup?.options.find(o => `ticket_${setup.options.indexOf(o)}` === selected);
+  if (lc.startsWith('!option ')) {
+    const setup = getSetup(message.guild.id);
+    const args = content.slice(8).trim().split(' ');
+    const emoji = args.shift();
+    const label = args.join(' ');
+    setup.options.push({ emoji, label });
+    saveTicketSetup();
+    return message.reply(`✅ Added: ${emoji} ${label}`);
+  }
 
-    if (!categoryId || !option) return interaction.reply({ content: '❌ Ticket setup error.', ephemeral: true });
+  if (lc.startsWith('!ticketviewer')) {
+    const setup = getSetup(message.guild.id);
+    const match = content.match(/<@&(\d+)>/);
+    if (!match) return message.reply('❌ Mention a valid role.');
+    setup.viewerRoleId = match[1];
+    saveTicketSetup();
+    return message.reply('✅ Viewer role set.');
+  }
 
-    const channel = await interaction.guild.channels.create({
-      name: `ticket-${user.username}`,
-      type: ChannelType.GuildText,
-      parent: categoryId,
-      permissionOverwrites: [
-        { id: interaction.guild.id, deny: ['ViewChannel'] },
-        { id: user.id, allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory'] },
-        { id: viewerRoleId, allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory'] }
-      ]
+  if (lc.startsWith('!ticketcategory')) {
+    const setup = getSetup(message.guild.id);
+    const match = content.match(/<#(\d+)>/);
+    if (!match) return message.reply('❌ Mention a valid channel.');
+    const ch = message.guild.channels.cache.get(match[1]);
+    if (!ch?.parentId) return message.reply('❌ Channel has no category.');
+    setup.categoryId = ch.parentId;
+    saveTicketSetup();
+    return message.reply(`✅ Category set.`);
+  }
+
+  if (lc === '!deployticketpanel') {
+    const setup = getSetup(message.guild.id);
+    if (!setup.description || !setup.options.length || !setup.viewerRoleId || !setup.categoryId)
+      return message.reply('❌ Setup incomplete.');
+
+    const embed = new EmbedBuilder()
+      .setTitle('📩 Open a Ticket')
+      .setDescription(setup.description)
+      .setColor('Blue');
+
+    if (setup.footerImage) embed.setImage(setup.footerImage);
+
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId('ticket_select')
+      .setPlaceholder('Select ticket category')
+      .addOptions(setup.options.map((opt, i) => ({
+        label: opt.label, value: `ticket_${i}`, emoji: opt.emoji
+      })));
+
+    const row = new ActionRowBuilder().addComponents(menu);
+    return message.channel.send({ embeds: [embed], components: [row] });
+  }
+
+  if (lc.startsWith('!addques')) {
+    const q = content.slice(9);
+    questions.push(q);
+    saveApp();
+    message.reply(`✅ Question added: ${q}`);
+  }
+
+  if (lc.startsWith('!setoptions')) {
+    options = content.slice(12).split(',').map(o => {
+      const [label, days] = o.split('|');
+      return { label, value: label.toLowerCase().replace(/\s+/g, '_'), cooldown: parseInt(days) || 14 };
     });
+    saveApp();
+    message.reply('✅ Options set.');
+  }
 
-    await channel.send({ content: `🎫 Hello ${user}, a staff member will assist you soon.
-**Reason:** ${option.label}` });
-    return interaction.reply({ content: '✅ Ticket created!', ephemeral: true });
+  if (lc.startsWith('!setchannel')) {
+    const ch = message.mentions.channels.first();
+    if (!ch) return message.reply('❌ Mention a valid channel.');
+    logChannelId = ch.id;
+    saveApp();
+    message.reply('✅ Log channel set.');
+  }
+
+  if (lc === '!deploy') {
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId('app_select')
+      .setPlaceholder('Select an option')
+      .addOptions(options.map(o => ({ label: o.label, value: o.value })));
+    const row = new ActionRowBuilder().addComponents(menu);
+    message.channel.send({ content: '📥 Click below to apply!', components: [row] });
+  }
+
+  if (lc === '!reset') {
+    questions = [];
+    options = [];
+    logChannelId = '';
+    saveApp();
+    message.reply('♻️ Reset all questions and options.');
   }
 });
 
@@ -199,6 +288,10 @@ function getSetup(guildId) {
     ticketSetup.set(guildId, { description: '', options: [], viewerRoleId: null, categoryId: null, footerImage: null });
   }
   return ticketSetup.get(guildId);
+}
+
+function saveApp() {
+  fs.writeFileSync(DATA_FILE, JSON.stringify({ questions, options, logChannelId }, null, 2));
 }
 
 client.login(process.env.DISCORD_TOKEN);
