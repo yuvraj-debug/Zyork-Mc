@@ -1,7 +1,5 @@
-// index.js
 require('dotenv').config();
 const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType } = require('discord.js');
-const keepAlive = require('./keep_alive');
 
 const client = new Client({
   intents: [
@@ -108,14 +106,14 @@ client.on('messageCreate', async message => {
   if (message.author.bot) return;
 
   // Add question command
-  if (message.content.startsWith('!addques') && message.member.permissions.has('ADMINISTRATOR')) {
+  if (message.content.startsWith('!addques') && message.member?.permissions.has('Administrator')) {
     const question = message.content.slice(8).trim();
     appData.questions.push(question);
     message.reply(`✅ Added question: ${question}`);
   }
 
   // Set options command
-  if (message.content.startsWith('!setoptions') && message.member.permissions.has('ADMINISTRATOR')) {
+  if (message.content.startsWith('!setoptions') && message.member?.permissions.has('Administrator')) {
     const optionsStr = message.content.slice(11).trim();
     const optionsList = optionsStr.split(',').map(opt => opt.trim());
     
@@ -132,7 +130,7 @@ client.on('messageCreate', async message => {
   }
 
   // Set channel command
-  if (message.content.startsWith('!setchannel') && message.member.permissions.has('ADMINISTRATOR')) {
+  if (message.content.startsWith('!setchannel') && message.member?.permissions.has('Administrator')) {
     const channelId = message.mentions.channels.first()?.id;
     if (channelId) {
       appData.channel = channelId;
@@ -143,7 +141,7 @@ client.on('messageCreate', async message => {
   }
 
   // Deploy command
-  if (message.content.startsWith('!deploy') && message.member.permissions.has('ADMINISTRATOR')) {
+  if (message.content.startsWith('!deploy') && message.member?.permissions.has('Administrator')) {
     if (appData.questions.length === 0 || Object.keys(appData.options).length === 0) {
       return message.reply('❌ Please set questions and options first!');
     }
@@ -167,7 +165,7 @@ client.on('messageCreate', async message => {
   }
 
   // Reset command
-  if (message.content.startsWith('!reset') && message.member.permissions.has('ADMINISTRATOR')) {
+  if (message.content.startsWith('!reset') && message.member?.permissions.has('Administrator')) {
     appData.questions = [];
     appData.options = {};
     appData.channel = null;
@@ -181,14 +179,14 @@ client.on('messageCreate', async message => {
   if (message.author.bot) return;
 
   // Ticket message command
-  if (message.content.startsWith('!ticket') && message.member.permissions.has('ADMINISTRATOR')) {
+  if (message.content.startsWith('!ticket') && message.member?.permissions.has('Administrator')) {
     const ticketMessage = message.content.slice(8).trim();
     ticketData.message = ticketMessage;
     message.reply('✅ Ticket panel message set!');
   }
 
   // Ticket option command
-  if (message.content.startsWith('!option') && message.member.permissions.has('ADMINISTRATOR')) {
+  if (message.content.startsWith('!option') && message.member?.permissions.has('Administrator')) {
     const parts = message.content.slice(8).trim().split(' ');
     const emoji = parts.shift();
     const label = parts.join(' ');
@@ -197,7 +195,7 @@ client.on('messageCreate', async message => {
   }
 
   // Ticket viewer command
-  if (message.content.startsWith('!ticketviewer') && message.member.permissions.has('ADMINISTRATOR')) {
+  if (message.content.startsWith('!ticketviewer') && message.member?.permissions.has('Administrator')) {
     const role = message.mentions.roles.first();
     if (role) {
       ticketData.viewerRole = role.id;
@@ -208,7 +206,7 @@ client.on('messageCreate', async message => {
   }
 
   // Ticket category command
-  if (message.content.startsWith('!ticketcategory') && message.member.permissions.has('ADMINISTRATOR')) {
+  if (message.content.startsWith('!ticketcategory') && message.member?.permissions.has('Administrator')) {
     const category = message.mentions.channels.first();
     if (category && category.type === ChannelType.GuildCategory) {
       ticketData.category = category.id;
@@ -219,7 +217,7 @@ client.on('messageCreate', async message => {
   }
 
   // Deploy ticket panel command
-  if (message.content.startsWith('!deployticketpanel') && message.member.permissions.has('ADMINISTRATOR')) {
+  if (message.content.startsWith('!deployticketpanel') && message.member?.permissions.has('Administrator')) {
     if (ticketData.options.length === 0) {
       return message.reply('❌ Please add ticket options first!');
     }
@@ -244,7 +242,7 @@ client.on('messageCreate', async message => {
   }
 
   // Reset ticket command
-  if (message.content.startsWith('!resetticket') && message.member.permissions.has('ADMINISTRATOR')) {
+  if (message.content.startsWith('!resetticket') && message.member?.permissions.has('Administrator')) {
     ticketData.message = null;
     ticketData.options = [];
     ticketData.viewerRole = null;
@@ -434,8 +432,7 @@ client.on('interactionCreate', async interaction => {
     }
 
     // Check permissions
-    const hasPermission = member.permissions.has('MANAGE_CHANNELS') || 
-                         channel.topic?.includes(member.id) || 
+    const hasPermission = member.permissions.has('ManageChannels') || 
                          (ticketData.viewerRole && member.roles.cache.has(ticketData.viewerRole));
 
     if (!hasPermission) {
@@ -472,8 +469,4 @@ client.on('interactionCreate', async interaction => {
   }
 });
 
-// Keep alive for Replit
-keepAlive();
-
-// Start the bot
 client.login(process.env.DISCORD_TOKEN);
