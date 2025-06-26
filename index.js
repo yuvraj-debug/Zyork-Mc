@@ -1,4 +1,4 @@
-// FULL FIXED DISCORD BOT CODE ✅ NO DOUBLE MESSAGES ✅ NON-ADMIN ACCESS ✅ TICKET & APPLICATION SYSTEM PERSISTENCE ✅ INTERACTION FIXED
+// FINAL DISCORD BOT CODE with FIXED TICKET + APPLICATION SYSTEM + CLOSE BUTTON
 require('dotenv').config();
 const fs = require('fs');
 const express = require('express');
@@ -11,9 +11,8 @@ const {
   StringSelectMenuBuilder,
   ButtonBuilder,
   ButtonStyle,
-  PermissionsBitField,
-  Events,
-  ChannelType
+  ChannelType,
+  Events
 } = require('discord.js');
 
 const app = express();
@@ -39,15 +38,14 @@ let questions = [];
 let options = [];
 let logChannelId = '';
 let ticketSetup = new Map();
-
-const userLastApplied = new Map();
 const userStates = new Map();
+const userLastApplied = new Map();
 
 if (fs.existsSync(DATA_FILE)) {
   const saved = JSON.parse(fs.readFileSync(DATA_FILE));
+  questions = saved.questions || [];
   options = saved.options || [];
   logChannelId = saved.logChannelId || '';
-  questions = saved.questions || [];
 }
 
 if (fs.existsSync(TICKET_FILE)) {
@@ -64,30 +62,12 @@ function saveApp() {
   fs.writeFileSync(DATA_FILE, JSON.stringify({ questions, options, logChannelId }, null, 2));
 }
 
-const games = {
-  guessNumber: Math.floor(Math.random() * 100) + 1,
-  scrambleWords: [
-    'banana', 'elephant', 'discord', 'javascript', 'pirate',
-    'oxygen', 'galaxy', 'universe', 'python', 'reactor',
-    'nebula', 'quantum', 'photon', 'gravity', 'comet'
-  ]
-};
-
-const triviaQuestions = [
-  { question: 'What is the capital of France?', answer: 'paris' },
-  { question: 'Which planet is known as the Red Planet?', answer: 'mars' },
-  { question: '2 + 2 * 2 = ?', answer: '6' },
-  { question: 'What is the largest mammal?', answer: 'blue whale' },
-  { question: 'Which element has the symbol O?', answer: 'oxygen' },
-  { question: 'Who wrote Hamlet?', answer: 'shakespeare' },
-  { question: 'What gas do plants absorb?', answer: 'carbon dioxide' },
-  { question: 'How many continents are there?', answer: '7' },
-  { question: 'In which sport is the term "love" used?', answer: 'tennis' },
-  { question: 'What’s the boiling point of water (°C)?', answer: '100' },
-  { question: 'Which country gifted the Statue of Liberty?', answer: 'france' },
-  { question: 'Who painted the Mona Lisa?', answer: 'da vinci' },
-  { question: 'What language is primarily spoken in Brazil?', answer: 'portuguese' }
-];
+function getSetup(guildId) {
+  if (!ticketSetup.has(guildId)) {
+    ticketSetup.set(guildId, { description: '', options: [], viewerRoleId: null, categoryId: null, footerImage: null });
+  }
+  return ticketSetup.get(guildId);
+}
 
 const scramble = word => word.split('').sort(() => 0.5 - Math.random()).join('');
 const isAdminOrOwner = member => member?.permissions?.has('Administrator') || member?.id === OWNER_ID;
@@ -99,15 +79,13 @@ client.on('messageCreate', async message => {
   const uid = message.author.id;
   const content = message.content.trim();
   const lc = content.toLowerCase();
-  const isCommand = lc.startsWith('!');
-  const state = userStates.get(uid) || {};
-  userStates.set(uid, state);
+  if (!userStates.has(uid)) userStates.set(uid, {});
+  const state = userStates.get(uid);
 
-  // Allow everyone to use help + games
-  const allowedCommands = ['!help', '!guess', '!trivia', '!scramble', '!rps'];
-  if (isCommand && !allowedCommands.some(cmd => lc.startsWith(cmd)) && !isAdminOrOwner(message.member)) {
-    return message.reply('❌ Only admins or the bot owner can use this command.');
-  }
+  const isGameCmd = ['!guess', '!trivia', '!scramble', '!rps'].some(cmd => lc.startsWith(cmd));
+  const isGeneralCmd = ['!help'].some(cmd => lc === cmd);
+  const isRestricted = !isGameCmd && !isGeneralCmd && !isAdminOrOwner(message.member);
+  if (isRestricted) return message.reply('❌ Only admins or the bot owner can use this command.');
 
   if (lc === '!help') {
     return message.channel.send(`📘 **Bot Commands**
@@ -140,71 +118,55 @@ client.on('messageCreate', async message => {
 \`!reset\` — Reset all settings`);
   }
 
-  if (lc.startsWith('!guess ')) {
-    const guess = parseInt(content.split(' ')[1]);
-    const correct = games.guessNumber;
-    if (guess === correct) {
-      games.guessNumber = Math.floor(Math.random() * 100) + 1;
-      return message.reply(`🎉 Correct! It was **${correct}**.`);
-    } else {
-      return message.reply('❌ Wrong guess. Try again!');
-    }
+  if (lc === '!deploy') {
+    if (!options.length) return message.reply('❌ No application options set.');
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId('app_select')
+      .setPlaceholder('Select an option')
+      .addOptions(options.map(o => ({ label: o.label, value: o.value })));
+    const row = new ActionRowBuilder().addComponents(menu);
+    message.channel.send({ content: '📥 Click below to apply!', components: [row] });
   }
 
-  if (lc === '!trivia') {
-    const q = triviaQuestions[Math.floor(Math.random() * triviaQuestions.length)];
-    state.triviaAnswer = q.answer;
-    return message.channel.send(`🧠 Trivia: ${q.question}`);
+  if (lc.startsWith('!addques')) {
+    const q = content.slice(9);
+    questions.push(q);
+    saveApp();
+    message.reply(`✅ Question added: ${q}`);
   }
 
-  if (state.triviaAnswer && lc === state.triviaAnswer.toLowerCase()) {
-    state.triviaAnswer = null;
-    return message.reply('✅ Correct answer!');
+  if (lc.startsWith('!setoptions')) {
+    options = content.slice(12).split(',').map(o => {
+      const [label, days] = o.split('|');
+      return { label, value: label.toLowerCase().replace(/\s+/g, '_'), cooldown: parseInt(days) || 14 };
+    });
+    saveApp();
+    message.reply('✅ Options set.');
   }
 
-  if (lc === '!scramble') {
-    const word = games.scrambleWords[Math.floor(Math.random() * games.scrambleWords.length)];
-    state.scrambleAnswer = word;
-    return message.channel.send(`🔤 Unscramble: \`${scramble(word)}\``);
+  if (lc.startsWith('!setchannel')) {
+    const ch = message.mentions.channels.first();
+    if (!ch) return message.reply('❌ Mention a valid channel.');
+    logChannelId = ch.id;
+    saveApp();
+    message.reply('✅ Log channel set.');
   }
 
-  if (state.scrambleAnswer && lc === state.scrambleAnswer.toLowerCase()) {
-    state.scrambleAnswer = null;
-    return message.reply('✅ Correct unscramble!');
+  if (lc === '!reset') {
+    questions = [];
+    options = [];
+    logChannelId = '';
+    saveApp();
+    message.reply('♻️ Reset all questions and options.');
   }
 });
 
 client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isStringSelectMenu()) return;
-
   const user = interaction.user;
-  const customId = interaction.customId;
+  const selected = interaction.values[0];
 
-  if (customId === 'ticket_select') {
-    const setup = getSetup(interaction.guildId);
-    const selected = interaction.values[0];
-    const index = parseInt(selected.split('_')[1]);
-    const categoryId = setup.categoryId;
-    const viewerRoleId = setup.viewerRoleId;
-    const option = setup.options[index];
-
-    const ticketChannel = await interaction.guild.channels.create({
-      name: `ticket-${user.username}`,
-      type: ChannelType.GuildText,
-      parent: categoryId,
-      permissionOverwrites: [
-        { id: interaction.guild.roles.everyone, deny: ['ViewChannel'] },
-        { id: user.id, allow: ['ViewChannel', 'SendMessages'] },
-        { id: viewerRoleId, allow: ['ViewChannel'] }
-      ]
-    });
-
-    await ticketChannel.send(`🎟️ Ticket created by <@${user.id}> for **${option.label}**.`);
-    return interaction.reply({ content: '✅ Ticket created. Check your channel list.', ephemeral: true });
-  }
-
-  if (customId === 'app_select') {
-    const selected = interaction.values[0];
+  if (interaction.customId === 'app_select') {
     const option = options.find(o => o.value === selected);
     if (!option) return interaction.reply({ content: '❌ Invalid option.', ephemeral: true });
 
@@ -219,9 +181,8 @@ client.on(Events.InteractionCreate, async interaction => {
     }
 
     if (!isAdminOrOwner(user)) userLastApplied.set(key, now);
-
     const dm = await user.createDM();
-    await interaction.reply({ content: '📩 Check your DMs to apply!', ephemeral: true });
+    await interaction.reply({ content: '📩 Check your DMs.', ephemeral: true });
 
     let i = 0;
     const answers = [];
@@ -245,16 +206,48 @@ client.on(Events.InteractionCreate, async interaction => {
       i++;
       ask();
     });
-
     ask();
   }
-});
 
-function getSetup(guildId) {
-  if (!ticketSetup.has(guildId)) {
-    ticketSetup.set(guildId, { description: '', options: [], viewerRoleId: null, categoryId: null, footerImage: null });
+  if (interaction.customId?.startsWith('ticket_select')) {
+    const guild = interaction.guild;
+    const member = await guild.members.fetch(interaction.user.id);
+    const setup = getSetup(guild.id);
+    const index = parseInt(interaction.values[0].split('_')[1]);
+    const opt = setup.options[index];
+
+    const ticketName = `ticket-${interaction.user.username.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+    const existing = guild.channels.cache.find(c => c.name === ticketName);
+    if (existing) return interaction.reply({ content: '❌ You already have an open ticket.', ephemeral: true });
+
+    const ch = await guild.channels.create({
+      name: ticketName,
+      type: ChannelType.GuildText,
+      parent: setup.categoryId,
+      permissionOverwrites: [
+        { id: guild.roles.everyone, deny: ['ViewChannel'] },
+        { id: interaction.user.id, allow: ['ViewChannel', 'SendMessages'] },
+        { id: setup.viewerRoleId, allow: ['ViewChannel'] }
+      ]
+    });
+
+    const closeBtn = new ButtonBuilder().setCustomId('close_ticket').setLabel('Close Ticket').setStyle(ButtonStyle.Danger);
+    const row = new ActionRowBuilder().addComponents(closeBtn);
+
+    await ch.send({
+      content: `<@${interaction.user.id}> Your ticket for **${opt.label}** is created.`,
+      components: [row]
+    });
+
+    await interaction.reply({ content: `✅ Ticket created: ${ch}`, ephemeral: true });
   }
-  return ticketSetup.get(guildId);
-}
+
+  if (interaction.customId === 'close_ticket') {
+    const ch = interaction.channel;
+    if (!ch.name.startsWith('ticket-')) return;
+    await interaction.reply({ content: '🛑 Closing this ticket in 3 seconds...', ephemeral: true });
+    setTimeout(() => ch.delete().catch(() => {}), 3000);
+  }
+});
 
 client.login(process.env.DISCORD_TOKEN);
