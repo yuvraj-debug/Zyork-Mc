@@ -13,8 +13,7 @@ const {
   ButtonStyle,
   ChannelType,
   Events,
-  PermissionsBitField,
-  Collection
+  PermissionsBitField
 } = require('discord.js');
 
 const app = express();
@@ -36,7 +35,7 @@ const client = new Client({
 // Data storage
 const dataPath = path.join(__dirname, 'bot_data.json');
 
-// Load data from file if exists
+// Load data from file
 function loadData() {
   try {
     if (fs.existsSync(dataPath)) {
@@ -87,29 +86,36 @@ function saveData(data) {
 let { logChannelId, ticketSetup, appQuestions, appOptions, userLastApplied } = loadData();
 const activeApplications = new Map();
 
+// Track last command execution to prevent duplicates
+const commandCooldowns = new Map();
+
 client.once('ready', () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
   console.log(`🛠️ Serving ${client.guilds.cache.size} guilds`);
 });
 
-// Helper function to send error messages
-async function sendError(message, error) {
-  console.error(error);
-  try {
-    await message.reply({ embeds: [
-      new EmbedBuilder()
-        .setTitle('❌ Error')
-        .setDescription(`An error occurred: ${error.message || error}`)
-        .setColor('Red')
-    ] });
-  } catch (err) {
-    console.error('Failed to send error message:', err);
+// Helper function to check for duplicate commands
+function isDuplicateCommand(message) {
+  const now = Date.now();
+  const key = `${message.author.id}_${message.content}`;
+  
+  if (commandCooldowns.has(key)) {
+    const lastTime = commandCooldowns.get(key);
+    if (now - lastTime < 1000) { // 1 second cooldown
+      return true;
+    }
   }
+  
+  commandCooldowns.set(key, now);
+  return false;
 }
 
 // Command handler
 client.on('messageCreate', async message => {
   if (message.author.bot || !message.guild) return;
+  
+  // Check for duplicate command
+  if (isDuplicateCommand(message)) return;
   
   const content = message.content.trim();
   const lc = content.toLowerCase();
@@ -142,6 +148,34 @@ client.on('messageCreate', async message => {
       return message.channel.send({ embeds: [embed] });
     }
 
+    // Mini-Games Commands
+    if (lc.startsWith('!guess ')) {
+      const number = parseInt(content.slice(7).trim());
+      if (isNaN(number)) return message.reply('Please provide a valid number.');
+      const randomNum = Math.floor(Math.random() * 10) + 1;
+      return message.reply(number === randomNum ? 
+        `🎉 Correct! The number was ${randomNum}.` : 
+        `❌ Wrong! The number was ${randomNum}. Try again!`);
+    }
+
+    if (lc === '!trivia') {
+      const questions = [
+        { q: "What is the capital of France?", a: "paris" },
+        { q: "How many continents are there?", a: "7" },
+        { q: "What is the largest planet in our solar system?", a: "jupiter" }
+      ];
+      const randomQ = questions[Math.floor(Math.random() * questions.length)];
+      return message.reply(`❓ ${randomQ.q}\nReply with your answer!`);
+    }
+
+    if (lc === '!scramble') {
+      const words = ['apple', 'banana', 'orange', 'grape', 'strawberry'];
+      const word = words[Math.floor(Math.random() * words.length)];
+      const scrambled = word.split('').sort(() => 0.5 - Math.random()).join('');
+      return message.reply(`🔀 Unscramble this word: ${scrambled}`);
+    }
+
+    // Application Commands
     if (lc.startsWith('!addques ')) {
       const q = content.slice(9).trim();
       if (!q) return message.reply('Please provide a question.');
@@ -178,6 +212,25 @@ client.on('messageCreate', async message => {
       return message.reply(`✅ Log channel set to ${ch}.`);
     }
 
+    if (lc === '!deploy') {
+      if (!appOptions.length) return message.reply('⚠️ Use `!setoptions` first.');
+
+      const menu = new StringSelectMenuBuilder()
+        .setCustomId('app_select')
+        .setPlaceholder('Choose a role to apply')
+        .addOptions(appOptions.map(opt => ({ 
+          label: opt.label, 
+          value: opt.value,
+          description: `Cooldown: ${opt.cooldown} days`
+        })));
+
+      const row = new ActionRowBuilder().addComponents(menu);
+      return message.channel.send({ 
+        content: '📥 Choose a role to apply:', 
+        components: [row] 
+      });
+    }
+
     if (lc === '!reset') {
       appOptions = [];
       appQuestions = [];
@@ -186,17 +239,7 @@ client.on('messageCreate', async message => {
       return message.reply('🔄 Application data reset.');
     }
 
-    if (lc === '!resetticket') {
-      ticketSetup = {
-        description: '',
-        options: [],
-        viewerRoleId: null,
-        categoryId: null
-      };
-      saveData({ logChannelId, ticketSetup, appQuestions, appOptions, userLastApplied });
-      return message.reply('🎟️ Ticket settings reset.');
-    }
-
+    // Ticket Commands
     if (lc.startsWith('!ticket ')) {
       const desc = content.slice(8).trim();
       if (!desc) return message.reply('Please provide a ticket message.');
@@ -255,30 +298,23 @@ client.on('messageCreate', async message => {
       return message.channel.send({ embeds: [embed], components: [row] });
     }
 
-    if (lc === '!deploy') {
-      if (!appOptions.length) return message.reply('⚠️ Use `!setoptions` first.');
-
-      const menu = new StringSelectMenuBuilder()
-        .setCustomId('app_select')
-        .setPlaceholder('Choose a role to apply')
-        .addOptions(appOptions.map(opt => ({ 
-          label: opt.label, 
-          value: opt.value,
-          description: `Cooldown: ${opt.cooldown} days`
-        })));
-
-      const row = new ActionRowBuilder().addComponents(menu);
-      return message.channel.send({ 
-        content: '📥 Choose a role to apply:', 
-        components: [row] 
-      });
+    if (lc === '!resetticket') {
+      ticketSetup = {
+        description: '',
+        options: [],
+        viewerRoleId: null,
+        categoryId: null
+      };
+      saveData({ logChannelId, ticketSetup, appQuestions, appOptions, userLastApplied });
+      return message.reply('🎟️ Ticket settings reset.');
     }
   } catch (error) {
-    sendError(message, error);
+    console.error('Command error:', error);
+    message.reply('❌ An error occurred while processing your command.').catch(console.error);
   }
 });
 
-// Interaction handler
+// Interaction handler (same as previous version)
 client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isStringSelectMenu() && !interaction.isButton()) return;
 
