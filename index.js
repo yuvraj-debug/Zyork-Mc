@@ -10,7 +10,8 @@ const {
   ButtonBuilder,
   ButtonStyle,
   PermissionsBitField,
-  AttachmentBuilder
+  AttachmentBuilder,
+  ChannelType
 } = require('discord.js');
 
 // Keep-alive server
@@ -177,28 +178,59 @@ client.on('messageCreate', async message => {
       return message.reply('❌ You need administrator permissions to deploy ticket panel.');
     }
     const setup = getGuildData(guild.id, 'tickets');
-    if (!setup.description || !setup.options.length || !setup.viewerRoleId || !setup.categoryId) {
-      return message.reply('❌ Setup incomplete. Need description, options, viewer role, and category.');
+    
+    // Validate setup
+    if (!setup.description) {
+      return message.reply('❌ Please set a ticket message first using `!ticket <message>`');
+    }
+    if (!setup.options.length) {
+      return message.reply('❌ Please add ticket options first using `!option <emoji> <label>`');
+    }
+    if (!setup.viewerRoleId) {
+      return message.reply('❌ Please set a viewer role first using `!ticketviewer @role`');
+    }
+    if (!setup.categoryId) {
+      return message.reply('❌ Please set a category first using `!ticketcategory #channel`');
     }
 
-    const embed = new EmbedBuilder()
-      .setTitle('📩 Open a Ticket')
-      .setDescription(setup.description)
-      .setColor('Blue');
-    if (setup.footerImage) embed.setImage(setup.footerImage);
+    try {
+      const embed = new EmbedBuilder()
+        .setTitle('📩 Open a Ticket')
+        .setDescription(setup.description)
+        .setColor('Blue');
+      
+      if (setup.footerImage) {
+        embed.setImage(setup.footerImage);
+      }
 
-    const menu = new StringSelectMenuBuilder()
-      .setCustomId('ticket_select')
-      .setPlaceholder('Select a ticket category')
-      .addOptions(setup.options.map((opt, i) => ({
-        label: opt.label,
-        value: `ticket_${i}`,
-        emoji: opt.emoji
-      })));
+      const menu = new StringSelectMenuBuilder()
+        .setCustomId('ticket_select')
+        .setPlaceholder('Select a ticket category')
+        .addOptions(setup.options.map((opt, i) => ({
+          label: opt.label,
+          value: `ticket_${i}`,
+          emoji: opt.emoji,
+          description: `Click to open ${opt.label} ticket`
+        })));
 
-    const row = new ActionRowBuilder().addComponents(menu);
-    await message.channel.send({ embeds: [embed], components: [row] });
-    return message.delete().catch(() => {});
+      const row = new ActionRowBuilder().addComponents(menu);
+      
+      await message.channel.send({ 
+        embeds: [embed], 
+        components: [row] 
+      });
+      
+      // Delete the command message
+      await message.delete().catch(() => {});
+      
+      return message.channel.send('✅ Ticket panel deployed successfully!').then(msg => {
+        setTimeout(() => msg.delete(), 5000);
+      });
+      
+    } catch (error) {
+      console.error('Error deploying ticket panel:', error);
+      return message.reply('❌ Failed to deploy ticket panel. Please check console for errors.');
+    }
   }
 
   // === APPLICATION SYSTEM ===
@@ -338,7 +370,7 @@ client.on('messageCreate', async message => {
       message.reply(`✅ Well done! The word was **${state.scramble.answer}**`);
       state.scramble = null;
     } else if (!state.scramble.answered) {
-      message.reply(`❌ Nope, that's not it!`);
+      message.reply('❌ Nope, that\'s not it!');
       state.scramble.answered = true;
     }
     return;
@@ -473,7 +505,7 @@ client.on('interactionCreate', async interaction => {
     // Send to ticket creator
     const uname = ch.name.split('-')[1];
     const member = interaction.guild.members.cache.find(m => 
-      m.user.username.toLowerCase().startsWith(uname)
+      m.user.username.toLowerCase().startsWith(uname))
     );
     if (member) {
       member.send({ 
