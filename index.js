@@ -44,40 +44,39 @@ let botData = {
   userLastApplied: new Map()
 };
 
-// Track processed messages to prevent duplicates
-const processedMessages = new Set();
+// Track last command usage to prevent duplicates
+const commandCooldowns = new Map();
 
 client.once('ready', () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
   client.user.setActivity('!help for commands');
 });
 
-// Command handler with duplicate prevention
+// Enhanced command handler with cooldown
 client.on('messageCreate', async message => {
   if (message.author.bot || !message.guild) return;
   
-  // Prevent duplicate processing
-  if (processedMessages.has(message.id)) return;
-  processedMessages.add(message.id);
-  
-  // Clean up old message IDs to prevent memory leaks
-  if (processedMessages.size > 1000) {
-    const oldest = Array.from(processedMessages).slice(0, 100);
-    oldest.forEach(id => processedMessages.delete(id));
-  }
-
   const content = message.content.trim();
   const lc = content.toLowerCase();
+
+  // Check command cooldown
+  const now = Date.now();
+  const cooldownKey = `${message.author.id}_${lc.split(' ')[0]}`;
+  if (commandCooldowns.has(cooldownKey)) {
+    const lastTime = commandCooldowns.get(cooldownKey);
+    if (now - lastTime < 1000) return; // 1 second cooldown
+  }
+  commandCooldowns.set(cooldownKey, now);
 
   try {
     if (lc === '!help') {
       const embed = new EmbedBuilder()
         .setTitle('📘 Bot Commands')
-        .setColor('Blue')
+        .setColor('#5865F2')
         .setDescription(`🎮 **Mini‑Games**
-\`!guess <number>\` — Guess the number
-\`!trivia\` — Trivia game
-\`!scramble\` — Unscramble word
+\`!guess <number>\` — Guess the number (1-10)
+\`!trivia\` — Answer a trivia question
+\`!scramble\` — Unscramble the word
 
 📝 **Applications**
 \`!addques <question>\` — Add application question
@@ -100,11 +99,18 @@ client.on('messageCreate', async message => {
     // Mini-Games Commands
     if (lc.startsWith('!guess ')) {
       const number = parseInt(content.slice(7).trim());
-      if (isNaN(number)) return message.reply('Please provide a valid number.');
+      if (isNaN(number) || number < 1 || number > 10) {
+        return message.reply('Please provide a number between 1-10.');
+      }
       const randomNum = Math.floor(Math.random() * 10) + 1;
-      return message.reply(number === randomNum ? 
-        `🎉 Correct! The number was ${randomNum}.` : 
-        `❌ Wrong! The number was ${randomNum}. Try again!`);
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle(number === randomNum ? '🎉 Correct!' : '❌ Wrong!')
+            .setDescription(`The number was ${randomNum}.`)
+            .setColor(number === randomNum ? '#57F287' : '#ED4245')
+        ]
+      });
     }
 
     if (lc === '!trivia') {
@@ -114,14 +120,29 @@ client.on('messageCreate', async message => {
         { q: "What is the largest planet in our solar system?", a: "jupiter" }
       ];
       const randomQ = questions[Math.floor(Math.random() * questions.length)];
-      return message.reply(`❓ ${randomQ.q}\nReply with your answer!`);
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle('❓ Trivia Question')
+            .setDescription(randomQ.q)
+            .setColor('#FEE75C')
+        ]
+      });
     }
 
     if (lc === '!scramble') {
       const words = ['apple', 'banana', 'orange', 'grape', 'strawberry'];
       const word = words[Math.floor(Math.random() * words.length)];
       const scrambled = word.split('').sort(() => 0.5 - Math.random()).join('');
-      return message.reply(`🔀 Unscramble this word: ${scrambled}`);
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle('🔀 Word Scramble')
+            .setDescription(`Unscramble this word: ${scrambled}`)
+            .setFooter({ text: `Answer: ${word}` })
+            .setColor('#EB459E')
+        ]
+      });
     }
 
     // Application Commands
@@ -129,7 +150,13 @@ client.on('messageCreate', async message => {
       const q = content.slice(9).trim();
       if (!q) return message.reply('Please provide a question.');
       botData.appQuestions.push(q);
-      return message.reply('✅ Question added.');
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setDescription('✅ Question added.')
+            .setColor('#57F287')
+        ]
+      });
     }
 
     if (lc.startsWith('!setoptions ')) {
@@ -148,18 +175,38 @@ client.on('messageCreate', async message => {
         }
       });
       
-      return message.reply(`✅ ${botData.appOptions.length} options set.`);
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setDescription(`✅ ${botData.appOptions.length} options set.`)
+            .setColor('#57F287')
+        ]
+      });
     }
 
     if (lc.startsWith('!setchannel')) {
       const ch = message.mentions.channels.first();
       if (!ch) return message.reply('Please mention a channel.');
       botData.logChannelId = ch.id;
-      return message.reply(`✅ Log channel set to ${ch}.`);
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setDescription(`✅ Log channel set to ${ch}.`)
+            .setColor('#57F287')
+        ]
+      });
     }
 
     if (lc === '!deploy') {
-      if (!botData.appOptions.length) return message.reply('⚠️ Use `!setoptions` first.');
+      if (!botData.appOptions.length) {
+        return message.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setDescription('⚠️ Use `!setoptions` first.')
+              .setColor('#FEE75C')
+          ]
+        });
+      }
 
       const menu = new StringSelectMenuBuilder()
         .setCustomId('app_select')
@@ -181,7 +228,13 @@ client.on('messageCreate', async message => {
       botData.appOptions = [];
       botData.appQuestions = [];
       botData.logChannelId = null;
-      return message.reply('🔄 Application data reset.');
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setDescription('🔄 Application data reset.')
+            .setColor('#FEE75C')
+        ]
+      });
     }
 
     // Ticket Commands
@@ -189,7 +242,13 @@ client.on('messageCreate', async message => {
       const desc = content.slice(8).trim();
       if (!desc) return message.reply('Please provide a ticket message.');
       botData.ticketSetup.description = desc;
-      return message.reply('✅ Ticket message set.');
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setDescription('✅ Ticket message set.')
+            .setColor('#57F287')
+        ]
+      });
     }
 
     if (lc.startsWith('!option ')) {
@@ -199,32 +258,56 @@ client.on('messageCreate', async message => {
       const emoji = args.shift();
       const label = args.join(' ');
       botData.ticketSetup.options.push({ emoji, label });
-      return message.reply('✅ Ticket option added.');
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setDescription('✅ Ticket option added.')
+            .setColor('#57F287')
+        ]
+      });
     }
 
     if (lc.startsWith('!ticketviewer')) {
       const match = content.match(/<@&(\d+)>/);
       if (!match) return message.reply('Please mention a role.');
       botData.ticketSetup.viewerRoleId = match[1];
-      return message.reply('✅ Ticket viewer role set.');
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setDescription('✅ Ticket viewer role set.')
+            .setColor('#57F287')
+        ]
+      });
     }
 
     if (lc.startsWith('!ticketcategory')) {
       const match = content.match(/<#(\d+)>/);
       if (!match) return message.reply('Please mention a category channel.');
       botData.ticketSetup.categoryId = match[1];
-      return message.reply('✅ Ticket category set.');
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setDescription('✅ Ticket category set.')
+            .setColor('#57F287')
+        ]
+      });
     }
 
     if (lc === '!deployticketpanel') {
       if (!botData.ticketSetup.description || !botData.ticketSetup.options.length) {
-        return message.reply('❌ Ticket setup incomplete. Set description and options first.');
+        return message.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setDescription('❌ Ticket setup incomplete. Set description and options first.')
+              .setColor('#ED4245')
+          ]
+        });
       }
 
       const embed = new EmbedBuilder()
         .setTitle('🎟️ Open a Ticket')
         .setDescription(botData.ticketSetup.description)
-        .setColor('Blue');
+        .setColor('#5865F2');
 
       const menu = new StringSelectMenuBuilder()
         .setCustomId('ticket_select')
@@ -246,20 +329,31 @@ client.on('messageCreate', async message => {
         viewerRoleId: null,
         categoryId: null
       };
-      return message.reply('🎟️ Ticket settings reset.');
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setDescription('🎟️ Ticket settings reset.')
+            .setColor('#FEE75C')
+        ]
+      });
     }
   } catch (error) {
     console.error('Command error:', error);
-    message.reply('❌ An error occurred while processing your command.').catch(console.error);
+    message.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setDescription('❌ An error occurred while processing your command.')
+          .setColor('#ED4245')
+      ]
+    }).catch(console.error);
   }
 });
 
-// Interaction handler
+// Enhanced interaction handler
 client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isStringSelectMenu() && !interaction.isButton()) return;
 
   try {
-    // Ticket selection handler
     if (interaction.customId === 'ticket_select') {
       await interaction.deferReply({ ephemeral: true });
       
@@ -275,7 +369,11 @@ client.on(Events.InteractionCreate, async interaction => {
       
       if (existingTicket) {
         return interaction.editReply({ 
-          content: `❗ You already have a ticket: ${existingTicket}`,
+          embeds: [
+            new EmbedBuilder()
+              .setDescription(`❗ You already have a ticket: ${existingTicket}`)
+              .setColor('#ED4245')
+          ],
           ephemeral: true
         });
       }
@@ -319,17 +417,25 @@ client.on(Events.InteractionCreate, async interaction => {
 
       // Send welcome message
       await ch.send({ 
-        content: `🎫 Ticket for <@${user.id}> — **${label}**\n\nPlease describe your issue in detail. Staff will be with you shortly.`,
+        embeds: [
+          new EmbedBuilder()
+            .setTitle(`🎫 Ticket for ${user.username}`)
+            .setDescription(`**Category:** ${label}\n\nPlease describe your issue in detail. Staff will be with you shortly.`)
+            .setColor('#5865F2')
+        ],
         components: [row] 
       });
       
       return interaction.editReply({ 
-        content: `✅ Ticket created: ${ch}`,
+        embeds: [
+          new EmbedBuilder()
+            .setDescription(`✅ Ticket created: ${ch}`)
+            .setColor('#57F287')
+        ],
         ephemeral: true
       });
     }
 
-    // Ticket close handler
     if (interaction.customId === 'close_ticket') {
       await interaction.deferReply({ ephemeral: true });
       
@@ -348,7 +454,12 @@ client.on(Events.InteractionCreate, async interaction => {
       // Try to send transcript to user
       try {
         await user.send({ 
-          content: '📁 Here is your ticket transcript:', 
+          embeds: [
+            new EmbedBuilder()
+              .setTitle('📁 Ticket Transcript')
+              .setDescription(`Here is your ticket transcript for ${ch.name}`)
+              .setColor('#5865F2')
+          ],
           files: [{
             attachment: Buffer.from(transcript, 'utf-8'),
             name: fileName
@@ -357,20 +468,27 @@ client.on(Events.InteractionCreate, async interaction => {
       } catch (err) {
         console.error('Failed to send transcript:', err);
         await interaction.followUp({
-          content: "⚠️ Couldn't DM you the transcript. Make sure your DMs are open!",
+          embeds: [
+            new EmbedBuilder()
+              .setDescription("⚠️ Couldn't DM you the transcript. Make sure your DMs are open!")
+              .setColor('#FEE75C')
+          ],
           ephemeral: true
         });
       }
       
       // Notify and delete channel
       await interaction.editReply({ 
-        content: '🗂️ Ticket closed. Check your DMs for the transcript.' 
+        embeds: [
+          new EmbedBuilder()
+            .setDescription('🗂️ Ticket closed. Check your DMs for the transcript.')
+            .setColor('#57F287')
+        ]
       });
       
       setTimeout(() => ch.delete().catch(console.error), 2000);
     }
 
-    // Application selection handler
     if (interaction.customId === 'app_select') {
       await interaction.deferReply({ ephemeral: true });
       
@@ -380,7 +498,11 @@ client.on(Events.InteractionCreate, async interaction => {
       
       if (!opt) {
         return interaction.editReply({ 
-          content: '❌ Invalid option selected.',
+          embeds: [
+            new EmbedBuilder()
+              .setDescription('❌ Invalid option selected.')
+              .setColor('#ED4245')
+          ],
           ephemeral: true
         });
       }
@@ -395,7 +517,11 @@ client.on(Events.InteractionCreate, async interaction => {
         const rem = cooldown - (now - last);
         const days = Math.ceil(rem / (24 * 60 * 60 * 1000));
         return interaction.editReply({ 
-          content: `⏳ You must wait **${days}** more day(s) before reapplying for ${opt.label}.`,
+          embeds: [
+            new EmbedBuilder()
+              .setDescription(`⏳ You must wait **${days}** more day(s) before reapplying for ${opt.label}.`)
+              .setColor('#FEE75C')
+          ],
           ephemeral: true
         });
       }
@@ -404,7 +530,11 @@ client.on(Events.InteractionCreate, async interaction => {
       botData.userLastApplied.set(key, now);
       
       await interaction.editReply({ 
-        content: '📩 Check your DMs to complete the application!',
+        embeds: [
+          new EmbedBuilder()
+            .setDescription('📩 Check your DMs to complete the application!')
+            .setColor('#57F287')
+        ],
         ephemeral: true
       });
       
@@ -413,14 +543,20 @@ client.on(Events.InteractionCreate, async interaction => {
       const answers = [];
       
       // Send first question
-      await dm.send({ embeds: [
-        new EmbedBuilder()
-          .setTitle(`📋 Application for ${opt.label}`)
-          .setDescription(`Question 1/${botData.appQuestions.length}\n\n${botData.appQuestions[currentQuestion]}`)
-          .setColor('Blue')
-      ] }).catch(() => {
+      await dm.send({ 
+        embeds: [
+          new EmbedBuilder()
+            .setTitle(`📋 Application for ${opt.label}`)
+            .setDescription(`Question 1/${botData.appQuestions.length}\n\n${botData.appQuestions[currentQuestion]}`)
+            .setColor('#5865F2')
+        ]
+      }).catch(() => {
         return interaction.followUp({
-          content: "⚠️ Couldn't DM you. Please enable DMs and try again!",
+          embeds: [
+            new EmbedBuilder()
+              .setDescription("⚠️ Couldn't DM you. Please enable DMs and try again!")
+              .setColor('#FEE75C')
+          ],
           ephemeral: true
         });
       });
@@ -437,24 +573,28 @@ client.on(Events.InteractionCreate, async interaction => {
         currentQuestion++;
         
         if (currentQuestion < botData.appQuestions.length) {
-          await dm.send({ embeds: [
-            new EmbedBuilder()
-              .setTitle(`📋 Question ${currentQuestion + 1}/${botData.appQuestions.length}`)
-              .setDescription(botData.appQuestions[currentQuestion])
-              .setColor('Blue')
-          ] });
+          await dm.send({ 
+            embeds: [
+              new EmbedBuilder()
+                .setTitle(`📋 Question ${currentQuestion + 1}/${botData.appQuestions.length}`)
+                .setDescription(botData.appQuestions[currentQuestion])
+                .setColor('#5865F2')
+            ]
+          });
         }
       });
       
       collector.on('end', async collected => {
         if (answers.length === botData.appQuestions.length) {
           // Application complete
-          await dm.send({ embeds: [
-            new EmbedBuilder()
-              .setTitle('✅ Application Submitted')
-              .setDescription(`Your application for **${opt.label}** has been received!`)
-              .setColor('Green')
-          ] });
+          await dm.send({ 
+            embeds: [
+              new EmbedBuilder()
+                .setTitle('✅ Application Submitted')
+                .setDescription(`Your application for **${opt.label}** has been received!`)
+                .setColor('#57F287')
+            ]
+          });
           
           // Log to channel if set
           if (botData.logChannelId) {
@@ -471,7 +611,7 @@ client.on(Events.InteractionCreate, async interaction => {
                   { name: 'Application', value: summary.length > 1024 ? 
                     `${summary.substring(0, 1000)}...` : summary }
                 )
-                .setColor('Blue')
+                .setColor('#5865F2')
                 .setTimestamp();
               
               await logChannel.send({ embeds: [logEmbed] });
@@ -481,12 +621,14 @@ client.on(Events.InteractionCreate, async interaction => {
           }
         } else {
           // Incomplete application
-          await dm.send({ embeds: [
-            new EmbedBuilder()
-              .setTitle('❌ Application Incomplete')
-              .setDescription('You took too long to answer all questions. Please try again.')
-              .setColor('Red')
-          ] });
+          await dm.send({ 
+            embeds: [
+              new EmbedBuilder()
+                .setTitle('❌ Application Incomplete')
+                .setDescription('You took too long to answer all questions. Please try again.')
+                .setColor('#ED4245')
+            ]
+          });
         }
       });
     }
@@ -494,12 +636,20 @@ client.on(Events.InteractionCreate, async interaction => {
     console.error('Interaction error:', error);
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply({ 
-        content: '❌ An error occurred while processing your request.',
+        embeds: [
+          new EmbedBuilder()
+            .setDescription('❌ An error occurred while processing your request.')
+            .setColor('#ED4245')
+        ],
         ephemeral: true
       }).catch(console.error);
     } else {
       await interaction.reply({ 
-        content: '❌ An error occurred while processing your request.', 
+        embeds: [
+          new EmbedBuilder()
+            .setDescription('❌ An error occurred while processing your request.')
+            .setColor('#ED4245')
+        ],
         ephemeral: true 
       }).catch(console.error);
     }
