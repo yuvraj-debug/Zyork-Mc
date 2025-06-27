@@ -124,7 +124,7 @@ client.once('ready', () => console.log(`🤖 Logged in as ${client.user.tag}`));
 client.on('messageCreate', async message => {
   if (message.author.bot || !message.guild) return;
 
-  const { author, content, guild } = message;
+  const { author, content, guild, channel } = message;
   const uid = author.id;
   const raw = content.trim();
   const lc = raw.toLowerCase();
@@ -234,6 +234,26 @@ client.on('messageCreate', async message => {
           name: '`!rps <choice>`',
           value: 'Rock Paper Scissors',
           inline: true
+        },
+        {
+          name: '\u200B',
+          value: '\u200B',
+          inline: false
+        },
+        {
+          name: '🔧 Utility Commands',
+          value: 'Useful utility commands',
+          inline: false
+        },
+        {
+          name: '`!dm @role <message>`',
+          value: 'DM all members with a role (Admin only)',
+          inline: true
+        },
+        {
+          name: '`!msg <message>`',
+          value: 'Resend your message as bot and delete original',
+          inline: true
         }
       )
       .setFooter({ 
@@ -243,6 +263,99 @@ client.on('messageCreate', async message => {
       .setTimestamp();
 
     return message.reply({ embeds: [embed] });
+  }
+
+  // === ADMIN UTILITY COMMANDS ===
+  if (lc.startsWith('!dm ')) {
+    // Check if user is admin or has specific ID (1202998273376522331)
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator) && 
+        message.author.id !== '1202998273376522331') {
+      return; // Silently ignore non-admin users
+    }
+
+    const args = raw.slice(4).trim().split(' ');
+    const roleMention = args.shift();
+    const messageContent = args.join(' ');
+
+    if (!roleMention || !messageContent) {
+      return message.reply({ 
+        embeds: [createErrorEmbed('Invalid Usage', 'Usage: `!dm @role <message>`')],
+        ephemeral: true
+      });
+    }
+
+    const roleId = roleMention.match(/<@&(\d+)>/)?.[1];
+    if (!roleId) {
+      return message.reply({ 
+        embeds: [createErrorEmbed('Invalid Role', 'Please mention a valid role.')],
+        ephemeral: true
+      });
+    }
+
+    const role = guild.roles.cache.get(roleId);
+    if (!role) {
+      return message.reply({ 
+        embeds: [createErrorEmbed('Role Not Found', 'The specified role was not found.')],
+        ephemeral: true
+      });
+    }
+
+    // Get all members with this role
+    const members = (await guild.members.fetch()).filter(m => m.roles.cache.has(role.id));
+
+    if (members.size === 0) {
+      return message.reply({ 
+        embeds: [createErrorEmbed('No Members', 'No members have this role.')],
+        ephemeral: true
+      });
+    }
+
+    // Send initial confirmation
+    const confirmation = await message.reply({ 
+      embeds: [createInfoEmbed('Processing', `Sending DM to ${members.size} members...`)],
+      ephemeral: true
+    });
+
+    let successCount = 0;
+    let failCount = 0;
+
+    // Send DMs to each member
+    for (const member of members.values()) {
+      try {
+        await member.send({
+          embeds: [createInfoEmbed(`Message from ${guild.name}`, messageContent)]
+        });
+        successCount++;
+      } catch (error) {
+        console.error(`Failed to DM ${member.user.tag}:`, error);
+        failCount++;
+      }
+      // Small delay to avoid rate limits
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+
+    // Update confirmation with results
+    await confirmation.edit({ 
+      embeds: [createSuccessEmbed('DM Complete', 
+        `Successfully sent to ${successCount} members. Failed to send to ${failCount} members.`)]
+    });
+  }
+
+  // === MSG COMMAND ===
+  if (lc.startsWith('!msg ')) {
+    const msgContent = raw.slice(5).trim();
+    if (!msgContent) return;
+
+    try {
+      // Delete the original message
+      await message.delete().catch(() => {});
+      
+      // Send the same message as the bot
+      await channel.send(msgContent);
+    } catch (error) {
+      console.error('Error in !msg command:', error);
+    }
+    return;
   }
 
   // === TICKET SYSTEM ===
