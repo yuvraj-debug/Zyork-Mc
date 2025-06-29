@@ -11,7 +11,10 @@ const {
   ButtonStyle,
   PermissionsBitField,
   AttachmentBuilder,
-  ChannelType
+  ChannelType,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle
 } = require('discord.js');
 
 // Keep-alive server
@@ -769,29 +772,48 @@ client.on('interactionCreate', async interaction => {
           allow: [
             PermissionsBitField.Flags.ViewChannel, 
             PermissionsBitField.Flags.SendMessages, 
-            PermissionsBitField.Flags.ReadMessageHistory
+            PermissionsBitField.Flags.ReadMessageHistory,
+            PermissionsBitField.Flags.ManageMessages
           ] 
         }
       ]
     });
+
+    // Send ticket creation message
+    const ticketEmbed = new EmbedBuilder()
+      .setColor('#EB459E')
+      .setTitle(`🎟️ ${opt.label} Ticket`)
+      .setDescription(`**Ticket created by:** ${user}\n**Category:** ${opt.label}\n\nPlease be patient while we assist you.`)
+      .setFooter({ text: 'Ticket will be closed if inactive for too long' })
+      .setTimestamp();
+
+    // Create ticket control buttons
+    const ticketButtons = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('ticket_claim')
+        .setLabel('Claim Ticket')
+        .setStyle(ButtonStyle.Primary)
+        .setEmoji('🙋'),
+      new ButtonBuilder()
+        .setCustomId('ticket_close')
+        .setLabel('Close')
+        .setStyle(ButtonStyle.Danger)
+        .setEmoji('🔒'),
+      new ButtonBuilder()
+        .setCustomId('ticket_close_reason')
+        .setLabel('Close with Reason')
+        .setStyle(ButtonStyle.Secondary)
+        .setEmoji('📝')
+    );
 
     await ch.send({ 
       content: `🎫 <@${user.id}> opened **${opt.label}** ticket. <@&${setup.viewerRoleId}>`, 
       allowedMentions: { 
         users: [user.id], 
         roles: [setup.viewerRoleId] 
-      } 
-    });
-
-    const delBtn = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId('ticket_delete')
-        .setLabel('Delete Ticket')
-        .setStyle(ButtonStyle.Danger)
-    );
-    await ch.send({ 
-      embeds: [createInfoEmbed('Ticket Controls', 'Click the button below to close this ticket and get a transcript.')],
-      components: [delBtn] 
+      },
+      embeds: [ticketEmbed],
+      components: [ticketButtons]
     });
 
     return interaction.reply({ 
@@ -800,45 +822,136 @@ client.on('interactionCreate', async interaction => {
     });
   }
 
-  // Ticket deletion
-  if (interaction.isButton() && interaction.customId === 'ticket_delete') {
+  // Ticket button interactions
+  if (interaction.isButton()) {
     const ch = interaction.channel;
     if (!ch.name.startsWith('ticket-')) return;
 
-    const hasPermission = interaction.member.permissions.has(PermissionsBitField.Flags.ManageChannels) || 
-                         interaction.member.roles.cache.has(getGuildData(interaction.guild.id, 'tickets').viewerRoleId);
-    if (!hasPermission) {
-      return interaction.reply({ 
-        embeds: [createErrorEmbed('Permission Denied', 'You need permission to delete tickets.')], 
-        ephemeral: true 
-      });
+    const setup = getGuildData(interaction.guild.id, 'tickets');
+    const isStaff = interaction.member.roles.cache.has(setup.viewerRoleId) || 
+                    interaction.member.permissions.has(PermissionsBitField.Flags.ManageChannels);
+    const isTicketOwner = ch.permissionOverwrites.cache.get(interaction.user.id)?.allow.has(PermissionsBitField.Flags.ViewChannel);
+
+    switch (interaction.customId) {
+      case 'ticket_claim': {
+        if (!isStaff) {
+          return interaction.reply({ 
+            embeds: [createErrorEmbed('Permission Denied', 'Only staff can claim tickets.')], 
+            ephemeral: true 
+          });
+        }
+
+        // Update permissions to remove other staff and add this staff member
+        await ch.permissionOverwrites.set([
+          {
+            id: interaction.guild.roles.everyone,
+            deny: [PermissionsBitField.Flags.ViewChannel]
+          },
+          {
+            id: interaction.user.id,
+            allow: [
+              PermissionsBitField.Flags.ViewChannel,
+              PermissionsBitField.Flags.SendMessages,
+              PermissionsBitField.Flags.ReadMessageHistory,
+              PermissionsBitField.Flags.ManageMessages
+            ]
+          },
+          ...ch.permissionOverwrites.cache
+            .filter(overwrite => overwrite.type === 1 && overwrite.id !== interaction.user.id)
+            .map(overwrite => ({
+              id: overwrite.id,
+              deny: [PermissionsBitField.Flags.ViewChannel]
+            }))
+        ]);
+
+        await interaction.reply({ 
+          embeds: [createSuccessEmbed('Ticket Claimed', `${interaction.user} has claimed this ticket!`)],
+          allowedMentions: { users: [interaction.user.id] }
+        });
+
+        // Disable the claim button
+        const newButtons = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('ticket_claim')
+            .setLabel('Claimed')
+            .setStyle(ButtonStyle.Success)
+            .setEmoji('✅')
+            .setDisabled(true),
+          new ButtonBuilder()
+            .setCustomId('ticket_close')
+            .setLabel('Close')
+            .setStyle(ButtonStyle.Danger)
+            .setEmoji('🔒'),
+          new ButtonBuilder()
+            .setCustomId('ticket_close_reason')
+            .setLabel('Close with Reason')
+            .setStyle(ButtonStyle.Secondary)
+            .setEmoji('📝')
+        );
+
+        const msg = await ch.messages.fetch({ limit: 1 }).then(messages => messages.first());
+        if (msg) {
+          await msg.edit({ components: [newButtons] });
+        }
+        break;
+      }
+
+      case 'ticket_close': {
+        if (!isStaff && !isTicketOwner) {
+          return interaction.reply({ 
+            embeds: [createErrorEmbed('Permission Denied', 'Only staff or ticket owner can close tickets.')], 
+            ephemeral: true 
+          });
+        }
+
+        await interaction.reply({ 
+          embeds: [createInfoEmbed('Processing', 'Generating transcript and closing ticket...')] 
+        });
+
+        await closeTicket(interaction, ch, setup, 'No reason provided');
+        break;
+      }
+
+      case 'ticket_close_reason': {
+        if (!isStaff && !isTicketOwner) {
+          return interaction.reply({ 
+            embeds: [createErrorEmbed('Permission Denied', 'Only staff or ticket owner can close tickets.')], 
+            ephemeral: true 
+          });
+        }
+
+        // Create a modal for the close reason
+        const modal = new ModalBuilder()
+          .setCustomId('ticket_close_modal')
+          .setTitle('Close Ticket Reason');
+
+        const reasonInput = new TextInputBuilder()
+          .setCustomId('close_reason')
+          .setLabel('Why are you closing this ticket?')
+          .setStyle(TextInputStyle.Paragraph)
+          .setRequired(true)
+          .setMaxLength(1000);
+
+        const actionRow = new ActionRowBuilder().addComponents(reasonInput);
+        modal.addComponents(actionRow);
+
+        await interaction.showModal(modal);
+        break;
+      }
     }
+  }
+
+  // Ticket close reason modal
+  if (interaction.isModalSubmit() && interaction.customId === 'ticket_close_modal') {
+    const reason = interaction.fields.getTextInputValue('close_reason');
+    const ch = interaction.channel;
+    const setup = getGuildData(interaction.guild.id, 'tickets');
 
     await interaction.reply({ 
-      embeds: [createInfoEmbed('Processing', 'Generating transcript...')], 
-      ephemeral: true 
+      embeds: [createInfoEmbed('Processing', 'Generating transcript and closing ticket...')] 
     });
 
-    const msgs = await ch.messages.fetch({ limit: 100 });
-    const transcript = [...msgs.values()]
-      .reverse()
-      .map(m => `${m.author.tag} [${m.createdAt.toLocaleString()}]: ${m.content}`)
-      .join('\n');
-
-    const file = new AttachmentBuilder(Buffer.from(transcript), { name: 'transcript.txt' });
-
-    const uname = ch.name.split('-')[1];
-    const member = interaction.guild.members.cache.find(m => 
-      m.user.username.toLowerCase().startsWith(uname)
-    );
-    if (member) {
-      member.send({ 
-        embeds: [createInfoEmbed('Ticket Closed', `Your ticket was closed by **${interaction.user.tag}**.`)],
-        files: [file] 
-      }).catch(() => {});
-    }
-
-    setTimeout(() => ch.delete().catch(() => {}), 3000);
+    await closeTicket(interaction, ch, setup, reason);
   }
 
   // Application system interactions
@@ -947,6 +1060,73 @@ client.on('interactionCreate', async interaction => {
     }
   }
 });
+
+// Helper function to close tickets
+async function closeTicket(interaction, channel, setup, reason) {
+  const msgs = await channel.messages.fetch({ limit: 100 });
+  const transcript = [...msgs.values()]
+    .reverse()
+    .map(m => `${m.author.tag} [${m.createdAt.toLocaleString()}]: ${m.content}`)
+    .join('\n');
+
+  const file = new AttachmentBuilder(Buffer.from(transcript), { name: 'transcript.txt' });
+
+  // Find ticket owner
+  const uname = channel.name.split('-')[1];
+  const member = interaction.guild.members.cache.find(m => 
+    m.user.username.toLowerCase().startsWith(uname)
+  );
+
+  // Create transcript embed
+  const transcriptEmbed = new EmbedBuilder()
+    .setColor('#EB459E')
+    .setTitle('🎟️ Ticket Transcript')
+    .setDescription(`**Ticket:** ${channel.name}\n**Closed by:** ${interaction.user.tag}\n**Reason:** ${reason}`)
+    .setFooter({ text: `Closed at ${new Date().toLocaleString()}` });
+
+  // Send to log channel if set
+  if (setup.channelId) {
+    const logChannel = await client.channels.fetch(setup.channelId);
+    if (logChannel) {
+      await logChannel.send({ 
+        embeds: [transcriptEmbed],
+        files: [file] 
+      });
+    }
+  }
+
+  // Send to ticket owner
+  if (member) {
+    try {
+      await member.send({ 
+        embeds: [
+          new EmbedBuilder()
+            .setColor('#EB459E')
+            .setTitle('🎟️ Your Ticket Was Closed')
+            .setDescription(`**Ticket:** ${channel.name}\n**Closed by:** ${interaction.user.tag}\n**Reason:** ${reason}`)
+            .setFooter({ text: 'Transcript attached below' }),
+          transcriptEmbed
+        ],
+        files: [file] 
+      });
+    } catch (error) {
+      console.error(`Failed to DM ${member.user.tag}:`, error);
+      await channel.send(`Couldn't DM transcript to ${member.user.tag} (DMs disabled?)`);
+    }
+  }
+
+  // Send final message and delete channel
+  await channel.send({ 
+    embeds: [
+      new EmbedBuilder()
+        .setColor('#EB459E')
+        .setTitle('🎟️ Ticket Closed')
+        .setDescription(`This ticket has been closed by ${interaction.user}\n**Reason:** ${reason}\n\nChannel will be deleted shortly.`)
+    ] 
+  });
+
+  setTimeout(() => channel.delete().catch(() => {}), 3000);
+}
 
 process.on('unhandledRejection', err => console.error(err));
 client.login(process.env.DISCORD_TOKEN);
