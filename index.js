@@ -50,6 +50,9 @@ const data = {
   }
 };
 
+// Deployment cooldown tracking
+const lastDeployments = new Map();
+
 // Utility functions
 const scramble = word => word.split('').sort(() => 0.5 - Math.random()).join('');
 
@@ -270,10 +273,11 @@ client.on('messageCreate', async message => {
 
   // === ADMIN UTILITY COMMANDS ===
   if (lc.startsWith('!dm ')) {
-    // Check if user is admin or has specific ID (1202998273376522331)
-    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator) && 
-        message.author.id !== '1202998273376522331') {
-      return; // Silently ignore non-admin users
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return message.reply({ 
+        embeds: [createErrorEmbed('Permission Denied', 'You need administrator permissions to use this command.')],
+        ephemeral: true
+      });
     }
 
     const args = raw.slice(4).trim().split(' ');
@@ -303,7 +307,6 @@ client.on('messageCreate', async message => {
       });
     }
 
-    // Get all members with this role
     const members = (await guild.members.fetch()).filter(m => m.roles.cache.has(role.id));
 
     if (members.size === 0) {
@@ -313,7 +316,6 @@ client.on('messageCreate', async message => {
       });
     }
 
-    // Send initial confirmation
     const confirmation = await message.reply({ 
       embeds: [createInfoEmbed('Processing', `Sending DM to ${members.size} members...`)],
       ephemeral: true
@@ -322,7 +324,6 @@ client.on('messageCreate', async message => {
     let successCount = 0;
     let failCount = 0;
 
-    // Send DMs to each member
     for (const member of members.values()) {
       try {
         await member.send({
@@ -333,11 +334,9 @@ client.on('messageCreate', async message => {
         console.error(`Failed to DM ${member.user.tag}:`, error);
         failCount++;
       }
-      // Small delay to avoid rate limits
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
 
-    // Update confirmation with results
     await confirmation.edit({ 
       embeds: [createSuccessEmbed('DM Complete', 
         `Successfully sent to ${successCount} members. Failed to send to ${failCount} members.`)]
@@ -350,10 +349,7 @@ client.on('messageCreate', async message => {
     if (!msgContent) return;
 
     try {
-      // Delete the original message
       await message.delete().catch(() => {});
-      
-      // Send the same message as the bot
       await channel.send(msgContent);
     } catch (error) {
       console.error('Error in !msg command:', error);
@@ -440,31 +436,63 @@ client.on('messageCreate', async message => {
 
   if (lc === '!deployticketpanel') {
     if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-      return message.reply({ embeds: [
-        createErrorEmbed('Permission Denied', 'You need administrator permissions to deploy ticket panel.')
-      ]});
+      return message.reply({ 
+        embeds: [createErrorEmbed('Permission Denied', 'You need administrator permissions to deploy ticket panel.')]
+      });
     }
+
+    // Check channel type
+    if (message.channel.type !== ChannelType.GuildText) {
+      return message.reply({
+        embeds: [createErrorEmbed('Invalid Channel', 'Ticket panel can only be deployed in text channels.')]
+      });
+    }
+
+    // Check bot permissions
+    const botPermissions = message.channel.permissionsFor(message.guild.members.me);
+    if (!botPermissions.has(PermissionsBitField.Flags.SendMessages)) {
+      return message.reply({
+        embeds: [createErrorEmbed('Missing Permissions', 'I need "Send Messages" permission in this channel.')]
+      });
+    }
+    if (!botPermissions.has(PermissionsBitField.Flags.EmbedLinks)) {
+      return message.reply({
+        embeds: [createErrorEmbed('Missing Permissions', 'I need "Embed Links" permission in this channel.')]
+      });
+    }
+
+    // Check deployment cooldown
+    const lastDeployed = lastDeployments.get(guild.id) || 0;
+    if (Date.now() - lastDeployed < 30000) { // 30 second cooldown
+      return message.reply({
+        embeds: [createErrorEmbed('Cooldown', 'Please wait 30 seconds between deployments.')]
+      });
+    }
+
     const setup = getGuildData(guild.id, 'tickets');
     
-    if (!setup.description) {
-      return message.reply({ embeds: [
-        createErrorEmbed('Setup Incomplete', 'Please set a ticket message first using `!ticket <message>`')
-      ]});
+    // Verify category exists
+    const category = guild.channels.cache.get(setup.categoryId);
+    if (!category) {
+      return message.reply({
+        embeds: [createErrorEmbed('Invalid Category', 'The configured category no longer exists.')]
+      });
     }
-    if (!setup.options.length) {
-      return message.reply({ embeds: [
-        createErrorEmbed('Setup Incomplete', 'Please add ticket options first using `!option <emoji> <label>`')
-      ]});
-    }
-    if (!setup.viewerRoleId) {
-      return message.reply({ embeds: [
-        createErrorEmbed('Setup Incomplete', 'Please set a viewer role first using `!ticketviewer @role`')
-      ]});
-    }
-    if (!setup.categoryId) {
-      return message.reply({ embeds: [
-        createErrorEmbed('Setup Incomplete', 'Please set a category first using `!ticketcategory #channel`')
-      ]});
+
+    // Detailed validation
+    const missingRequirements = [];
+    if (!setup.description) missingRequirements.push('Ticket message (!ticket <message>)');
+    if (!setup.options.length) missingRequirements.push('Ticket options (!option <emoji> <label>)');
+    if (!setup.viewerRoleId) missingRequirements.push('Viewer role (!ticketviewer @role)');
+    if (!setup.categoryId) missingRequirements.push('Category (!ticketcategory #channel)');
+    
+    if (missingRequirements.length > 0) {
+      return message.reply({
+        embeds: [createErrorEmbed(
+          'Setup Incomplete', 
+          `Missing required setup:\n${missingRequirements.map(r => `• ${r}`).join('\n')}`
+        )]
+      });
     }
 
     try {
@@ -475,10 +503,12 @@ client.on('messageCreate', async message => {
         .setCustomId('ticket_select')
         .setPlaceholder('Select a ticket category')
         .addOptions(setup.options.map((opt, i) => ({
-          label: opt.label,
+          label: opt.label.length > 25 ? opt.label.substring(0, 22) + '...' : opt.label,
           value: `ticket_${i}`,
           emoji: opt.emoji,
-          description: `Click to open ${opt.label} ticket`
+          description: opt.label.length > 50 ? 
+            `Click to open ${opt.label.substring(0, 47)}...` : 
+            `Click to open ${opt.label}`
         })));
 
       const row = new ActionRowBuilder().addComponents(menu);
@@ -486,16 +516,22 @@ client.on('messageCreate', async message => {
       await message.channel.send({ embeds: [embed], components: [row] });
       await message.delete().catch(() => {});
       
-      return message.channel.send({ embeds: [
-        createSuccessEmbed('Panel Deployed', 'Ticket panel deployed successfully!')
-      ]}).then(msg => {
+      // Update deployment timestamp
+      lastDeployments.set(guild.id, Date.now());
+      
+      return message.channel.send({ 
+        embeds: [createSuccessEmbed('Panel Deployed', 'Ticket panel deployed successfully!')]
+      }).then(msg => {
         setTimeout(() => msg.delete(), 5000);
       });
     } catch (error) {
       console.error('Error deploying ticket panel:', error);
-      return message.reply({ embeds: [
-        createErrorEmbed('Deployment Failed', 'Failed to deploy ticket panel. Please check console for errors.')
-      ]});
+      return message.reply({ 
+        embeds: [createErrorEmbed(
+          'Deployment Failed', 
+          `Failed to deploy ticket panel:\n\`\`\`${error.message}\`\`\``
+        )]
+      });
     }
   }
 
