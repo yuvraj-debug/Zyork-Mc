@@ -18,6 +18,7 @@ const {
 } = require('discord.js');
 const ytdl = require('ytdl-core');
 const ytsr = require('ytsr');
+const { createAudioPlayer, createAudioResource, joinVoiceChannel, NoSubscriberBehavior, AudioPlayerStatus } = require('@discordjs/voice');
 
 // Keep-alive server
 const app = express();
@@ -702,6 +703,7 @@ client.on('messageCreate', async message => {
           textChannel: channel,
           voiceChannel: voiceChannel,
           connection: null,
+          player: null,
           songs: [],
           volume: 5,
           playing: false
@@ -735,14 +737,14 @@ client.on('messageCreate', async message => {
       queue.songs.push(song);
 
       if (!queue.playing) {
-        play(guild, queue.songs[0]);
+        playMusic(guild, queue.songs[0]);
       } else {
         message.reply({ 
           embeds: [createMusicEmbed('Added to Queue', `🎵 Added **${song.title}** to the queue!`)]
         });
       }
     } catch (error) {
-      console.error(error);
+      console.error('Music play error:', error);
       message.reply({ 
         embeds: [createErrorEmbed('Error', 'There was an error trying to play that song!')]
       });
@@ -765,6 +767,9 @@ client.on('messageCreate', async message => {
     }
 
     queue.songs = [];
+    if (queue.player) {
+      queue.player.stop();
+    }
     if (queue.connection) {
       queue.connection.destroy();
     }
@@ -790,8 +795,8 @@ client.on('messageCreate', async message => {
       });
     }
 
-    if (queue.connection) {
-      queue.connection.dispatcher.end();
+    if (queue.player) {
+      queue.player.stop();
       message.reply({ 
         embeds: [createMusicEmbed('Skipped', '⏭️ Skipped the current song!')]
       });
@@ -815,8 +820,8 @@ client.on('messageCreate', async message => {
   }
 });
 
-// Music player function
-async function play(guild, song) {
+// Enhanced music player function
+async function playMusic(guild, song) {
   const queue = data.musicQueues.get(guild.id);
   if (!song) {
     if (queue.connection) {
@@ -829,37 +834,66 @@ async function play(guild, song) {
   queue.playing = true;
 
   try {
+    // Create or reuse connection
     if (!queue.connection) {
-      queue.connection = await queue.voiceChannel.join();
+      queue.connection = joinVoiceChannel({
+        channelId: queue.voiceChannel.id,
+        guildId: guild.id,
+        adapterCreator: guild.voiceAdapterCreator,
+      });
     }
 
-    const dispatcher = queue.connection
-      .play(ytdl(song.url, { quality: 'highestaudio', highWaterMark: 1 << 25 }))
-      .on('finish', () => {
-        queue.songs.shift();
-        play(guild, queue.songs[0]);
-      })
-      .on('error', error => {
-        console.error(error);
-        queue.textChannel.send({ 
-          embeds: [createErrorEmbed('Error', 'There was an error playing the song!')]
-        });
-        queue.songs.shift();
-        play(guild, queue.songs[0]);
+    // Create audio player if not exists
+    if (!queue.player) {
+      queue.player = createAudioPlayer({
+        behaviors: {
+          noSubscriber: NoSubscriberBehavior.Pause,
+        },
       });
 
-    dispatcher.setVolumeLogarithmic(queue.volume / 5);
+      queue.connection.subscribe(queue.player);
+    }
+
+    // Handle player events
+    queue.player.on(AudioPlayerStatus.Idle, () => {
+      queue.songs.shift();
+      playMusic(guild, queue.songs[0]);
+    });
+
+    queue.player.on('error', error => {
+      console.error('Player error:', error);
+      queue.textChannel.send({ 
+        embeds: [createErrorEmbed('Error', 'There was an error playing the song!')]
+      });
+      queue.songs.shift();
+      playMusic(guild, queue.songs[0]);
+    });
+
+    // Create audio resource with better quality settings
+    const stream = ytdl(song.url, {
+      filter: 'audioonly',
+      quality: 'highestaudio',
+      highWaterMark: 1 << 25,
+      dlChunkSize: 0,
+    });
+
+    const resource = createAudioResource(stream, {
+      inlineVolume: true,
+    });
+
+    resource.volume.setVolume(queue.volume / 5);
+    queue.player.play(resource);
     
     queue.textChannel.send({ 
       embeds: [createMusicEmbed('Now Playing', `🎵 Now playing **${song.title}**`)]
     });
   } catch (error) {
-    console.error(error);
+    console.error('Play music error:', error);
     queue.textChannel.send({ 
       embeds: [createErrorEmbed('Error', 'There was an error trying to play the song!')]
     });
     queue.songs.shift();
-    play(guild, queue.songs[0]);
+    playMusic(guild, queue.songs[0]);
   }
 }
 
