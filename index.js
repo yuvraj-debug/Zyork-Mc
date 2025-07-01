@@ -79,11 +79,10 @@ const getGuildData = (guildId, type) => {
   return data[type].get(guildId);
 };
 
-// Time parsing utility (days only)
 const parseTimeToMs = (timeStr) => {
   const match = timeStr.match(/^(\d+)d$/i);
   if (!match) return null;
-  return parseInt(match[1]) * 86400000; // days to milliseconds
+  return parseInt(match[1]) * 86400000;
 };
 
 const formatCooldown = (seconds) => {
@@ -151,170 +150,31 @@ client.on('messageCreate', async message => {
 
   // === HELP COMMAND ===
   if (lc === '!help') {
-    const embed = new EmbedBuilder()
-      .setTitle('🌟 Bot Command Help Center')
-      .setColor('#5865F2')
-      .setThumbnail(client.user.displayAvatarURL())
-      .setDescription('Here are all the commands you can use with this bot:')
-      .addFields(
-        {
-          name: '🎟️ Ticket System Commands',
-          value: 'Create and manage support tickets',
-          inline: false
-        },
-        {
-          name: '`!ticket <message>`',
-          value: 'Set the ticket message',
-          inline: true
-        },
-        {
-          name: '`!option <emoji> <label>`',
-          value: 'Add a ticket category',
-          inline: true
-        },
-        {
-          name: '`!ticketviewer @role`',
-          value: 'Set ticket viewer role',
-          inline: true
-        },
-        {
-          name: '`!ticketcategory #channel`',
-          value: 'Set ticket category',
-          inline: true
-        },
-        {
-          name: '`!ticketlog #channel`',
-          value: 'Set ticket log channel',
-          inline: true
-        },
-        {
-          name: '`!deployticketpanel`',
-          value: 'Deploy ticket menu',
-          inline: true
-        },
-        {
-          name: '\u200B',
-          value: '\u200B',
-          inline: false
-        },
-        {
-          name: '📝 Application System Commands',
-          value: 'Manage application forms',
-          inline: false
-        },
-        {
-          name: '`!addques <question>`',
-          value: 'Add application question',
-          inline: true
-        },
-        {
-          name: '`!setoptions Option|Days,...`',
-          value: 'Set options with cooldown in days (e.g., Staff|1d, Mod|3d)',
-          inline: true
-        },
-        {
-          name: '`!setchannel #channel`',
-          value: 'Set log channel',
-          inline: true
-        },
-        {
-          name: '`!deployapp`',
-          value: 'Deploy application menu',
-          inline: true
-        },
-        {
-          name: '`!resetapp`',
-          value: 'Reset application data',
-          inline: true
-        },
-        {
-          name: '\u200B',
-          value: '\u200B',
-          inline: false
-        },
-        {
-          name: '🎮 Mini-Games Commands',
-          value: 'Fun games to play',
-          inline: false
-        },
-        {
-          name: '`!guess <number>`',
-          value: 'Guess a number (1-100)',
-          inline: true
-        },
-        {
-          name: '`!trivia`',
-          value: 'Answer trivia questions',
-          inline: true
-        },
-        {
-          name: '`!scramble`',
-          value: 'Unscramble the word',
-          inline: true
-        },
-        {
-          name: '`!rps <choice>`',
-          value: 'Rock Paper Scissors',
-          inline: true
-        },
-        {
-          name: '\u200B',
-          value: '\u200B',
-          inline: false
-        },
-        {
-          name: '🎵 Music Commands',
-          value: 'Play music in voice channels',
-          inline: false
-        },
-        {
-          name: '`!play <youtube_url or song_name>`',
-          value: 'Play music in your voice channel',
-          inline: true
-        },
-        {
-          name: '`!stop`',
-          value: 'Stop music playback',
-          inline: true
-        },
-        {
-          name: '`!skip`',
-          value: 'Skip current song',
-          inline: true
-        },
-        {
-          name: '`!queue`',
-          value: 'Show current queue',
-          inline: true
-        },
-        {
-          name: '\u200B',
-          value: '\u200B',
-          inline: false
-        },
-        {
-          name: '🔧 Utility Commands',
-          value: 'Useful utility commands',
-          inline: false
-        },
-        {
-          name: '`!dm @role <message>`',
-          value: 'DM all members with a role (Admin only)',
-          inline: true
-        },
-        {
-          name: '`!msg <message>`',
-          value: 'Resend your message as bot and delete original',
-          inline: true
-        }
-      )
-      .setFooter({ 
-        text: 'Made with ❤️ by yuvrajsingh0321', 
-        iconURL: 'https://cdn.discordapp.com/emojis/947070959172825118.webp' 
-      })
-      .setTimestamp();
+    try {
+      const embed = new EmbedBuilder()
+        .setTitle('🌟 Bot Command Help Center')
+        .setColor('#5865F2')
+        .setThumbnail(client.user.displayAvatarURL())
+        .setDescription('Here are all the commands you can use with this bot:')
+        .addFields(
+          { name: '🎟️ Ticket System', value: '`!ticket`, `!option`, `!ticketviewer`, `!ticketcategory`, `!ticketlog`, `!deployticketpanel`', inline: false },
+          { name: '📝 Applications', value: '`!addques`, `!setoptions`, `!setchannel`, `!deployapp`, `!resetapp`', inline: false },
+          { name: '🎮 Games', value: '`!guess`, `!trivia`, `!scramble`, `!rps`', inline: false },
+          { name: '🎵 Music', value: '`!play`, `!stop`, `!skip`, `!queue`', inline: false },
+          { name: '🔧 Utilities', value: '`!dm`, `!msg`', inline: false }
+        )
+        .setFooter({ 
+          text: 'Use !help <category> for more details', 
+          iconURL: 'https://cdn.discordapp.com/emojis/947070959172825118.webp' 
+        })
+        .setTimestamp();
 
-    return message.reply({ embeds: [embed] });
+      await message.reply({ embeds: [embed] });
+    } catch (error) {
+      console.error('Error in help command:', error);
+      await message.reply('An error occurred while showing help.');
+    }
+    return;
   }
 
   // === ADMIN UTILITY COMMANDS ===
