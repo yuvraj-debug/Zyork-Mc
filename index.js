@@ -16,6 +16,8 @@ const {
   TextInputBuilder,
   TextInputStyle
 } = require('discord.js');
+const ytdl = require('ytdl-core');
+const ytsr = require('ytsr');
 
 // Keep-alive server
 const app = express();
@@ -29,7 +31,8 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.DirectMessages
+    GatewayIntentBits.DirectMessages,
+    GatewayIntentBits.GuildVoiceStates
   ],
   partials: [Partials.Channel]
 });
@@ -47,7 +50,8 @@ const data = {
       { question: 'Which planet is known as the Red Planet?', answer: 'mars' },
       { question: '2 + 2 * 2 = ?', answer: '6' }
     ]
-  }
+  },
+  musicQueues: new Map()
 };
 
 // Deployment cooldown tracking
@@ -63,7 +67,8 @@ const getGuildData = (guildId, type) => {
       options: [],
       viewerRoleId: null,
       categoryId: null,
-      footerImage: null
+      footerImage: null,
+      logChannelId: null
     } : {
       questions: [],
       options: {},
@@ -124,6 +129,12 @@ const createApplicationEmbed = (title, description) => new EmbedBuilder()
   .setColor('#5865F2')
   .setTimestamp();
 
+const createMusicEmbed = (title, description) => new EmbedBuilder()
+  .setTitle(`🎵 ${title}`)
+  .setDescription(description)
+  .setColor('#9B59B6')
+  .setTimestamp();
+
 client.once('ready', () => console.log(`🤖 Logged in as ${client.user.tag}`));
 
 // Command handler
@@ -169,6 +180,11 @@ client.on('messageCreate', async message => {
         {
           name: '`!ticketcategory #channel`',
           value: 'Set ticket category',
+          inline: true
+        },
+        {
+          name: '`!ticketlog #channel`',
+          value: 'Set ticket log channel',
           inline: true
         },
         {
@@ -239,6 +255,36 @@ client.on('messageCreate', async message => {
         {
           name: '`!rps <choice>`',
           value: 'Rock Paper Scissors',
+          inline: true
+        },
+        {
+          name: '\u200B',
+          value: '\u200B',
+          inline: false
+        },
+        {
+          name: '🎵 Music Commands',
+          value: 'Play music in voice channels',
+          inline: false
+        },
+        {
+          name: '`!play <youtube_url or song_name>`',
+          value: 'Play music in your voice channel',
+          inline: true
+        },
+        {
+          name: '`!stop`',
+          value: 'Stop music playback',
+          inline: true
+        },
+        {
+          name: '`!skip`',
+          value: 'Skip current song',
+          inline: true
+        },
+        {
+          name: '`!queue`',
+          value: 'Show current queue',
           inline: true
         },
         {
@@ -431,6 +477,23 @@ client.on('messageCreate', async message => {
     const parent = guild.channels.cache.get(setup.categoryId);
     return message.reply({ embeds: [
       createSuccessEmbed('Category Set', `Ticket category has been set to **${parent?.name}**`)
+    ]});
+  }
+
+  if (lc.startsWith('!ticketlog')) {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return message.reply({ embeds: [
+        createErrorEmbed('Permission Denied', 'You need administrator permissions to set ticket log channel.')
+      ]});
+    }
+    const setup = getGuildData(guild.id, 'tickets');
+    const match = raw.match(/<#(\d+)>/);
+    if (!match) return message.reply({ embeds: [
+      createErrorEmbed('Invalid Channel', 'Please mention a valid channel.')
+    ]});
+    setup.logChannelId = match[1];
+    return message.reply({ embeds: [
+      createSuccessEmbed('Log Channel Set', `Ticket log channel set to <#${match[1]}>`)
     ]});
   }
 
@@ -755,7 +818,190 @@ client.on('messageCreate', async message => {
         `You chose **${player}**, I chose **${botPick}** → ${result}`)
     ]});
   }
+
+  // === MUSIC COMMANDS ===
+  if (lc.startsWith('!play ')) {
+    const voiceChannel = message.member.voice.channel;
+    if (!voiceChannel) {
+      return message.reply({ 
+        embeds: [createErrorEmbed('Error', 'You need to be in a voice channel to play music!')]
+      });
+    }
+
+    const query = raw.slice(6).trim();
+    if (!query) {
+      return message.reply({ 
+        embeds: [createErrorEmbed('Error', 'Please provide a YouTube URL or song name to play!')]
+      });
+    }
+
+    try {
+      // Check if queue exists for this guild
+      if (!data.musicQueues.has(guild.id)) {
+        data.musicQueues.set(guild.id, {
+          textChannel: channel,
+          voiceChannel: voiceChannel,
+          connection: null,
+          songs: [],
+          volume: 5,
+          playing: false
+        });
+      }
+
+      const queue = data.musicQueues.get(guild.id);
+      
+      // Validate URL or search
+      let songInfo;
+      if (ytdl.validateURL(query)) {
+        songInfo = await ytdl.getInfo(query);
+      } else {
+        const searchResults = await ytsr(query, { limit: 1 });
+        if (!searchResults.items || searchResults.items.length === 0) {
+          return message.reply({ 
+            embeds: [createErrorEmbed('Error', 'No results found for your search!')]
+          });
+        }
+        const video = searchResults.items[0];
+        songInfo = await ytdl.getInfo(video.url);
+      }
+
+      const song = {
+        title: songInfo.videoDetails.title,
+        url: songInfo.videoDetails.video_url,
+        duration: songInfo.videoDetails.lengthSeconds,
+        requestedBy: message.author
+      };
+
+      queue.songs.push(song);
+
+      if (!queue.playing) {
+        play(guild, queue.songs[0]);
+      } else {
+        message.reply({ 
+          embeds: [createMusicEmbed('Added to Queue', `🎵 Added **${song.title}** to the queue!`)]
+        });
+      }
+    } catch (error) {
+      console.error(error);
+      message.reply({ 
+        embeds: [createErrorEmbed('Error', 'There was an error trying to play that song!')]
+      });
+    }
+  }
+
+  if (lc === '!stop') {
+    const voiceChannel = message.member.voice.channel;
+    if (!voiceChannel) {
+      return message.reply({ 
+        embeds: [createErrorEmbed('Error', 'You need to be in a voice channel to stop music!')]
+      });
+    }
+
+    const queue = data.musicQueues.get(guild.id);
+    if (!queue) {
+      return message.reply({ 
+        embeds: [createErrorEmbed('Error', 'There is no music playing!')]
+      });
+    }
+
+    queue.songs = [];
+    if (queue.connection) {
+      queue.connection.destroy();
+    }
+    data.musicQueues.delete(guild.id);
+
+    message.reply({ 
+      embeds: [createMusicEmbed('Stopped', '⏹️ Stopped the music and cleared the queue!')]
+    });
+  }
+
+  if (lc === '!skip') {
+    const voiceChannel = message.member.voice.channel;
+    if (!voiceChannel) {
+      return message.reply({ 
+        embeds: [createErrorEmbed('Error', 'You need to be in a voice channel to skip music!')]
+      });
+    }
+
+    const queue = data.musicQueues.get(guild.id);
+    if (!queue) {
+      return message.reply({ 
+        embeds: [createErrorEmbed('Error', 'There is no music playing!')]
+      });
+    }
+
+    if (queue.connection) {
+      queue.connection.dispatcher.end();
+      message.reply({ 
+        embeds: [createMusicEmbed('Skipped', '⏭️ Skipped the current song!')]
+      });
+    }
+  }
+
+  if (lc === '!queue') {
+    const queue = data.musicQueues.get(guild.id);
+    if (!queue || queue.songs.length === 0) {
+      return message.reply({ 
+        embeds: [createErrorEmbed('Error', 'There is no music in the queue!')]
+      });
+    }
+
+    const embed = createMusicEmbed('Music Queue', `Now Playing: **${queue.songs[0].title}**`)
+      .setDescription(queue.songs.slice(1).map((song, i) => 
+        `${i + 1}. ${song.title} (Requested by ${song.requestedBy})`).join('\n'))
+      .setFooter({ text: `Total songs: ${queue.songs.length}` });
+
+    message.reply({ embeds: [embed] });
+  }
 });
+
+// Music player function
+async function play(guild, song) {
+  const queue = data.musicQueues.get(guild.id);
+  if (!song) {
+    if (queue.connection) {
+      queue.connection.destroy();
+    }
+    data.musicQueues.delete(guild.id);
+    return;
+  }
+
+  queue.playing = true;
+
+  try {
+    if (!queue.connection) {
+      queue.connection = await queue.voiceChannel.join();
+    }
+
+    const dispatcher = queue.connection
+      .play(ytdl(song.url, { quality: 'highestaudio', highWaterMark: 1 << 25 }))
+      .on('finish', () => {
+        queue.songs.shift();
+        play(guild, queue.songs[0]);
+      })
+      .on('error', error => {
+        console.error(error);
+        queue.textChannel.send({ 
+          embeds: [createErrorEmbed('Error', 'There was an error playing the song!')]
+        });
+        queue.songs.shift();
+        play(guild, queue.songs[0]);
+      });
+
+    dispatcher.setVolumeLogarithmic(queue.volume / 5);
+    
+    queue.textChannel.send({ 
+      embeds: [createMusicEmbed('Now Playing', `🎵 Now playing **${song.title}**`)]
+    });
+  } catch (error) {
+    console.error(error);
+    queue.textChannel.send({ 
+      embeds: [createErrorEmbed('Error', 'There was an error trying to play the song!')]
+    });
+    queue.songs.shift();
+    play(guild, queue.songs[0]);
+  }
+}
 
 // Interaction handling
 client.on('interactionCreate', async interaction => {
@@ -1080,7 +1326,30 @@ client.on('interactionCreate', async interaction => {
             });
           }
 
-          await logChannel.send({ embeds: [embed] });
+          // Add action buttons for the application
+          const actionRow = new ActionRowBuilder()
+            .addComponents(
+              new ButtonBuilder()
+                .setCustomId(`app_accept_${interaction.user.id}_${option}`)
+                .setLabel('Accept')
+                .setStyle(ButtonStyle.Success)
+                .setEmoji('✅'),
+              new ButtonBuilder()
+                .setCustomId(`app_reject_${interaction.user.id}_${option}`)
+                .setLabel('Reject')
+                .setStyle(ButtonStyle.Danger)
+                .setEmoji('❌'),
+              new ButtonBuilder()
+                .setCustomId(`app_ticket_${interaction.user.id}_${option}`)
+                .setLabel('Open Ticket')
+                .setStyle(ButtonStyle.Primary)
+                .setEmoji('🎟️')
+            );
+
+          await logChannel.send({ 
+            embeds: [embed],
+            components: [actionRow]
+          });
         }
       }
 
@@ -1095,9 +1364,209 @@ client.on('interactionCreate', async interaction => {
       });
     }
   }
+
+  // Application response buttons
+  if (interaction.isButton() && interaction.customId.startsWith('app_')) {
+    const [action, userId, option] = interaction.customId.split('_').slice(1);
+    const member = await interaction.guild.members.fetch(userId).catch(() => null);
+    
+    if (!member) {
+      return interaction.reply({
+        embeds: [createErrorEmbed('Error', 'User not found in this server.')],
+        ephemeral: true
+      });
+    }
+
+    switch (action) {
+      case 'accept': {
+        try {
+          await member.send({
+            embeds: [createSuccessEmbed('Application Accepted', 
+              `🎉 Congratulations! Your application for **${option}** in **${interaction.guild.name}** has been accepted!`)]
+          });
+
+          await interaction.reply({
+            embeds: [createSuccessEmbed('Application Accepted', 
+              `Successfully accepted ${member}'s application for ${option}!`)],
+            ephemeral: true
+          });
+
+          // Update the original message to show it's been accepted
+          const newEmbed = interaction.message.embeds[0]
+            .setColor('#57F287')
+            .setTitle(`✅ Accepted: ${interaction.message.embeds[0].title}`)
+            .setFooter({ text: `Accepted by ${interaction.user.tag}` });
+
+          await interaction.message.edit({
+            embeds: [newEmbed],
+            components: [] // Remove the buttons
+          });
+        } catch (error) {
+          console.error(error);
+          await interaction.reply({
+            embeds: [createErrorEmbed('Error', 'Could not DM the user about the acceptance.')],
+            ephemeral: true
+          });
+        }
+        break;
+      }
+
+      case 'reject': {
+        // Create a modal for the rejection reason
+        const modal = new ModalBuilder()
+          .setCustomId(`app_reject_reason_${userId}_${option}`)
+          .setTitle('Rejection Reason');
+
+        const reasonInput = new TextInputBuilder()
+          .setCustomId('reject_reason')
+          .setLabel('Why are you rejecting this application?')
+          .setStyle(TextInputStyle.Paragraph)
+          .setRequired(true)
+          .setMaxLength(1000);
+
+        const actionRow = new ActionRowBuilder().addComponents(reasonInput);
+        modal.addComponents(actionRow);
+
+        await interaction.showModal(modal);
+        break;
+      }
+
+      case 'ticket': {
+        const setup = getGuildData(interaction.guild.id, 'tickets');
+        if (!setup.categoryId) {
+          return interaction.reply({
+            embeds: [createErrorEmbed('Error', 'Ticket system not properly configured.')],
+            ephemeral: true
+          });
+        }
+
+        const name = `app-${member.user.username.toLowerCase().replace(/\s+/g, '-')}-${Date.now().toString().slice(-4)}`;
+        const ch = await interaction.guild.channels.create({
+          name,
+          type: ChannelType.GuildText,
+          parent: setup.categoryId,
+          permissionOverwrites: [
+            { 
+              id: interaction.guild.roles.everyone, 
+              deny: [PermissionsBitField.Flags.ViewChannel] 
+            },
+            { 
+              id: member.id, 
+              allow: [
+                PermissionsBitField.Flags.ViewChannel, 
+                PermissionsBitField.Flags.SendMessages, 
+                PermissionsBitField.Flags.ReadMessageHistory
+              ] 
+            },
+            { 
+              id: interaction.user.id, 
+              allow: [
+                PermissionsBitField.Flags.ViewChannel, 
+                PermissionsBitField.Flags.SendMessages, 
+                PermissionsBitField.Flags.ReadMessageHistory,
+                PermissionsBitField.Flags.ManageMessages
+              ] 
+            }
+          ]
+        });
+
+        const ticketEmbed = new EmbedBuilder()
+          .setColor('#EB459E')
+          .setTitle(`🎟️ Application Follow-up: ${option}`)
+          .setDescription(`**Ticket created for:** ${member}\n**Application type:** ${option}\n\nThis ticket was opened to discuss your application further.`)
+          .setFooter({ text: 'Ticket will be closed if inactive for too long' })
+          .setTimestamp();
+
+        const ticketButtons = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('ticket_claim')
+            .setLabel('Claim Ticket')
+            .setStyle(ButtonStyle.Primary)
+            .setEmoji('🙋'),
+          new ButtonBuilder()
+            .setCustomId('ticket_close')
+            .setLabel('Close')
+            .setStyle(ButtonStyle.Danger)
+            .setEmoji('🔒'),
+          new ButtonBuilder()
+            .setCustomId('ticket_close_reason')
+            .setLabel('Close with Reason')
+            .setStyle(ButtonStyle.Secondary)
+            .setEmoji('📝')
+        );
+
+        await ch.send({ 
+          content: `🎫 Application follow-up for ${member} (${option})`, 
+          embeds: [ticketEmbed],
+          components: [ticketButtons]
+        });
+
+        await interaction.reply({
+          embeds: [createSuccessEmbed('Ticket Created', `Created follow-up ticket: <#${ch.id}>`)],
+          ephemeral: true
+        });
+
+        // Update the original message to show a ticket was opened
+        const newEmbed = interaction.message.embeds[0]
+          .setColor('#FEE75C')
+          .setTitle(`🎟️ Ticket Opened: ${interaction.message.embeds[0].title}`)
+          .setFooter({ text: `Ticket opened by ${interaction.user.tag}` });
+
+        await interaction.message.edit({
+          embeds: [newEmbed],
+          components: [] // Remove the buttons
+        });
+        break;
+      }
+    }
+  }
+
+  // Application rejection reason modal
+  if (interaction.isModalSubmit() && interaction.customId.startsWith('app_reject_reason_')) {
+    const [_, userId, option] = interaction.customId.split('_').slice(2);
+    const reason = interaction.fields.getTextInputValue('reject_reason');
+    const member = await interaction.guild.members.fetch(userId).catch(() => null);
+    
+    if (!member) {
+      return interaction.reply({
+        embeds: [createErrorEmbed('Error', 'User not found in this server.')],
+        ephemeral: true
+      });
+    }
+
+    try {
+      await member.send({
+        embeds: [createErrorEmbed('Application Rejected', 
+          `Your application for **${option}** in **${interaction.guild.name}** has been rejected.\n\n**Reason:** ${reason}`)]
+      });
+
+      await interaction.reply({
+        embeds: [createSuccessEmbed('Application Rejected', 
+          `Successfully rejected ${member}'s application for ${option} with the provided reason.`)],
+        ephemeral: true
+      });
+
+      // Update the original message to show it's been rejected
+      const newEmbed = interaction.message.embeds[0]
+        .setColor('#ED4245')
+        .setTitle(`❌ Rejected: ${interaction.message.embeds[0].title}`)
+        .setFooter({ text: `Rejected by ${interaction.user.tag}` });
+
+      await interaction.message.edit({
+        embeds: [newEmbed],
+        components: [] // Remove the buttons
+      });
+    } catch (error) {
+      console.error(error);
+      await interaction.reply({
+        embeds: [createErrorEmbed('Error', 'Could not DM the user about the rejection.')],
+        ephemeral: true
+      });
+    }
+  }
 });
 
-// Helper function to close tickets
+// Enhanced ticket closing function
 async function closeTicket(interaction, channel, setup, reason) {
   const msgs = await channel.messages.fetch({ limit: 100 });
   const transcript = [...msgs.values()]
@@ -1107,11 +1576,21 @@ async function closeTicket(interaction, channel, setup, reason) {
 
   const file = new AttachmentBuilder(Buffer.from(transcript), { name: 'transcript.txt' });
 
-  // Find ticket owner
+  // Find ticket owner and claimer
   const uname = channel.name.split('-')[1];
   const member = interaction.guild.members.cache.find(m => 
     m.user.username.toLowerCase().startsWith(uname)
   );
+  
+  // Check if ticket was claimed
+  let claimedBy = null;
+  const ticketButtons = channel.messages.cache.find(m => m.components.length > 0);
+  if (ticketButtons) {
+    const claimButton = ticketButtons.components[0].components.find(c => c.customId === 'ticket_claim');
+    if (claimButton && claimButton.disabled) {
+      claimedBy = ticketButtons.mentions.users.first();
+    }
+  }
 
   // Create transcript embed
   const transcriptEmbed = new EmbedBuilder()
@@ -1121,8 +1600,8 @@ async function closeTicket(interaction, channel, setup, reason) {
     .setFooter({ text: `Closed at ${new Date().toLocaleString()}` });
 
   // Send to log channel if set
-  if (setup.channelId) {
-    const logChannel = await client.channels.fetch(setup.channelId);
+  if (setup.logChannelId) {
+    const logChannel = await client.channels.fetch(setup.logChannelId);
     if (logChannel) {
       await logChannel.send({ 
         embeds: [transcriptEmbed],
@@ -1131,19 +1610,69 @@ async function closeTicket(interaction, channel, setup, reason) {
     }
   }
 
-  // Send to ticket owner
+  // Enhanced DM to ticket owner
   if (member) {
     try {
+      const ticketCategory = channel.name.split('-')[2] || 'General Support';
+      
+      const dmEmbed = new EmbedBuilder()
+        .setColor('#EB459E')
+        .setTitle(`🎟️ Your Ticket in ${interaction.guild.name} has been closed`)
+        .setDescription([
+          `**Ticket Channel:** ${channel.name}`,
+          `**Closed by:** ${interaction.user}`,
+          `**Reason:** ${reason}`,
+          '',
+          'We value your feedback and would appreciate your rating of our support.',
+          'Please take a moment to share your satisfaction level by choosing a rating between 1-5 stars below. Your input is valuable to us!'
+        ].join('\n'))
+        .setThumbnail(interaction.guild.iconURL())
+        .addFields(
+          {
+            name: '• Ticket Information',
+            value: [
+              `**Category:** ${ticketCategory}`,
+              `**Claimed by:** ${claimedBy ? claimedBy.tag : 'Not claimed'}`,
+              `**Total Messages:** ${msgs.size}`
+            ].join('\n'),
+            inline: false
+          }
+        )
+        .setFooter({ 
+          text: `Ticket closed at ${new Date().toLocaleString()}`, 
+          iconURL: interaction.user.displayAvatarURL() 
+        });
+
+      // Create rating buttons
+      const ratingButtons = new ActionRowBuilder()
+        .addComponents(
+          new ButtonBuilder()
+            .setCustomId('rate_1')
+            .setLabel('⭐')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId('rate_2')
+            .setLabel('⭐⭐')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId('rate_3')
+            .setLabel('⭐⭐⭐')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId('rate_4')
+            .setLabel('⭐⭐⭐⭐')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId('rate_5')
+            .setLabel('⭐⭐⭐⭐⭐')
+            .setStyle(ButtonStyle.Secondary)
+        );
+
       await member.send({ 
-        embeds: [
-          new EmbedBuilder()
-            .setColor('#EB459E')
-            .setTitle('🎟️ Your Ticket Was Closed')
-            .setDescription(`**Ticket:** ${channel.name}\n**Closed by:** ${interaction.user.tag}\n**Reason:** ${reason}`)
-            .setFooter({ text: 'Transcript attached below' }),
-          transcriptEmbed
-        ],
-        files: [file] 
+        content: '📩 Here\'s the transcript of your closed ticket:',
+        embeds: [dmEmbed, transcriptEmbed],
+        files: [file],
+        components: [ratingButtons]
       });
     } catch (error) {
       console.error(`Failed to DM ${member.user.tag}:`, error);
@@ -1157,12 +1686,45 @@ async function closeTicket(interaction, channel, setup, reason) {
       new EmbedBuilder()
         .setColor('#EB459E')
         .setTitle('🎟️ Ticket Closed')
-        .setDescription(`This ticket has been closed by ${interaction.user}\n**Reason:** ${reason}\n\nChannel will be deleted shortly.`)
+        .setDescription([
+          `This ticket has been closed by ${interaction.user}`,
+          `**Reason:** ${reason}`,
+          '',
+          'The channel will be deleted shortly.'
+        ].join('\n'))
+        .setFooter({ text: 'Thank you for using our ticket system!' })
     ] 
   });
 
-  setTimeout(() => channel.delete().catch(() => {}), 3000);
+  setTimeout(() => channel.delete().catch(() => {}), 5000);
 }
+
+// Rating system interaction
+client.on('interactionCreate', async interaction => {
+  if (!interaction.isButton() || !interaction.customId.startsWith('rate_')) return;
+  
+  const rating = parseInt(interaction.customId.split('_')[1]);
+  if (isNaN(rating)) return;
+
+  try {
+    await interaction.reply({
+      embeds: [createSuccessEmbed('Thank You!', `You rated this ticket ${'⭐'.repeat(rating)}. We appreciate your feedback!`)],
+      ephemeral: true
+    });
+
+    // You can log the rating to a channel or database here
+    // For example:
+    // const logChannel = await client.channels.fetch('YOUR_LOG_CHANNEL_ID');
+    // if (logChannel) {
+    //   await logChannel.send({
+    //     embeds: [createInfoEmbed('Ticket Rating', 
+    //       `${interaction.user} rated their ticket experience ${'⭐'.repeat(rating)}`)]
+    //   });
+    // }
+  } catch (error) {
+    console.error('Error handling rating:', error);
+  }
+});
 
 process.on('unhandledRejection', err => console.error(err));
 client.login(process.env.DISCORD_TOKEN);
