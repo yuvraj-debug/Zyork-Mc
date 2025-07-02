@@ -19,96 +19,7 @@ const {
 const ytdl = require('ytdl-core');
 const ytsr = require('ytsr');
 const { createAudioPlayer, createAudioResource, joinVoiceChannel, NoSubscriberBehavior, AudioPlayerStatus } = require('@discordjs/voice');
-// Add this near the top with other require statements
 const { REST, Routes } = require('discord.js');
-
-// Add this after client.login() or in your ready event
-const registerCommands = async () => {
-  try {
-    const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
-    
-    const commands = [
-      {
-        name: 'play',
-        description: 'Play a song from YouTube',
-        options: [
-          {
-            name: 'query',
-            description: 'Song name or YouTube URL',
-            type: 3, // STRING type
-            required: true
-          }
-        ]
-      },
-      {
-        name: 'skip',
-        description: 'Skip the current song'
-      },
-      {
-        name: 'stop',
-        description: 'Stop the music and clear queue'
-      },
-      {
-        name: 'queue',
-        description: 'Show the current music queue'
-      }
-    ];
-
-    console.log('Started refreshing application (/) commands.');
-    await rest.put(
-      Routes.applicationCommands(client.user.id),
-      { body: commands }
-    );
-    console.log('Successfully reloaded application (/) commands.');
-  } catch (error) {
-    console.error('Error refreshing commands:', error);
-  }
-};
-
-// Call this when your bot starts
-client.once('ready', () => {
-  console.log(`🤖 Logged in as ${client.user.tag}`);
-  registerCommands();
-});
-
-// Add this new interaction handler for slash commands
-client.on('interactionCreate', async interaction => {
-  if (!interaction.isCommand()) return;
-
-  const { commandName, options } = interaction;
-
-  // Music commands
-  if (commandName === 'play') {
-    const query = options.getString('query');
-    // Add your play logic here using the query
-    await interaction.reply(`Searching for: ${query}`);
-    
-    // Example implementation:
-    const voiceChannel = interaction.member.voice.channel;
-    if (!voiceChannel) {
-      return interaction.followUp({ 
-        embeds: [createErrorEmbed('Error', 'You need to be in a voice channel to play music!')]
-      });
-    }
-
-    // ... rest of your play command logic
-  }
-
-  if (commandName === 'skip') {
-    // Add your skip logic here
-    await interaction.reply('Skipping current song...');
-  }
-
-  if (commandName === 'stop') {
-    // Add your stop logic here
-    await interaction.reply('Stopping music...');
-  }
-
-  if (commandName === 'queue') {
-    // Add your queue logic here
-    await interaction.reply('Showing queue...');
-  }
-});
 
 // Keep-alive server
 const app = express();
@@ -225,9 +136,415 @@ const createMusicEmbed = (title, description) => new EmbedBuilder()
   .setColor('#9B59B6')
   .setTimestamp();
 
-client.once('ready', () => console.log(`🤖 Logged in as ${client.user.tag}`));
+// Register slash commands
+const registerCommands = async () => {
+  try {
+    const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+    
+    const commands = [
+      {
+        name: 'play',
+        description: 'Play a song from YouTube',
+        options: [
+          {
+            name: 'query',
+            description: 'Song name or YouTube URL',
+            type: 3, // STRING type
+            required: true
+          }
+        ]
+      },
+      {
+        name: 'skip',
+        description: 'Skip the current song'
+      },
+      {
+        name: 'stop',
+        description: 'Stop the music and clear queue'
+      },
+      {
+        name: 'queue',
+        description: 'Show the current music queue'
+      },
+      {
+        name: 'ticket',
+        description: 'Configure ticket system',
+        options: [
+          {
+            name: 'description',
+            description: 'Set ticket panel description',
+            type: 3,
+            required: false
+          },
+          {
+            name: 'viewerrole',
+            description: 'Set ticket viewer role',
+            type: 8, // ROLE type
+            required: false
+          },
+          {
+            name: 'category',
+            description: 'Set ticket category',
+            type: 7, // CHANNEL type
+            required: false
+          },
+          {
+            name: 'logchannel',
+            description: 'Set ticket log channel',
+            type: 7,
+            required: false
+          }
+        ]
+      },
+      {
+        name: 'application',
+        description: 'Configure application system',
+        options: [
+          {
+            name: 'addquestion',
+            description: 'Add an application question',
+            type: 3,
+            required: false
+          },
+          {
+            name: 'setoptions',
+            description: 'Set application options (comma separated, use | for cooldown)',
+            type: 3,
+            required: false
+          },
+          {
+            name: 'setchannel',
+            description: 'Set application log channel',
+            type: 7,
+            required: false
+          }
+        ]
+      }
+    ];
 
-// Command handler
+    console.log('Started refreshing application (/) commands.');
+    await rest.put(
+      Routes.applicationCommands(client.user.id),
+      { body: commands }
+    );
+    console.log('Successfully reloaded application (/) commands.');
+  } catch (error) {
+    console.error('Error refreshing commands:', error);
+  }
+};
+
+client.once('ready', () => {
+  console.log(`🤖 Logged in as ${client.user.tag}`);
+  registerCommands();
+});
+
+// Slash command handler
+client.on('interactionCreate', async interaction => {
+  if (!interaction.isCommand()) return;
+
+  const { commandName, options, guild, member } = interaction;
+
+  // Music commands
+  if (commandName === 'play') {
+    const query = options.getString('query');
+    const voiceChannel = member.voice.channel;
+    
+    if (!voiceChannel) {
+      return interaction.reply({ 
+        embeds: [createErrorEmbed('Error', 'You need to be in a voice channel to play music!')],
+        ephemeral: true
+      });
+    }
+
+    try {
+      // Check if queue exists for this guild
+      if (!data.musicQueues.has(guild.id)) {
+        data.musicQueues.set(guild.id, {
+          textChannel: interaction.channel,
+          voiceChannel: voiceChannel,
+          connection: null,
+          player: null,
+          songs: [],
+          volume: 5,
+          playing: false
+        });
+      }
+
+      const queue = data.musicQueues.get(guild.id);
+      
+      // Validate URL or search
+      let songInfo;
+      if (ytdl.validateURL(query)) {
+        songInfo = await ytdl.getInfo(query);
+      } else {
+        const searchResults = await ytsr(query, { limit: 1 });
+        if (!searchResults.items || searchResults.items.length === 0) {
+          return interaction.reply({ 
+            embeds: [createErrorEmbed('Error', 'No results found for your search!')],
+            ephemeral: true
+          });
+        }
+        const video = searchResults.items[0];
+        songInfo = await ytdl.getInfo(video.url);
+      }
+
+      const song = {
+        title: songInfo.videoDetails.title,
+        url: songInfo.videoDetails.video_url,
+        duration: songInfo.videoDetails.lengthSeconds,
+        requestedBy: interaction.user,
+        thumbnail: songInfo.videoDetails.thumbnails[0].url
+      };
+
+      queue.songs.push(song);
+
+      if (!queue.playing) {
+        await interaction.reply({ 
+          embeds: [createMusicEmbed('Playing', `🎵 Now playing **${song.title}**`)
+            .setThumbnail(song.thumbnail)
+            .setURL(song.url)
+          ]
+        });
+        playMusic(guild, queue.songs[0]);
+      } else {
+        await interaction.reply({ 
+          embeds: [createMusicEmbed('Added to Queue', `🎵 Added **${song.title}** to the queue!`)
+            .setThumbnail(song.thumbnail)
+            .setURL(song.url)
+          ]
+        });
+      }
+    } catch (error) {
+      console.error('Music play error:', error);
+      interaction.reply({ 
+        embeds: [createErrorEmbed('Error', 'There was an error trying to play that song!')],
+        ephemeral: true
+      });
+    }
+  }
+
+  if (commandName === 'skip') {
+    const voiceChannel = member.voice.channel;
+    if (!voiceChannel) {
+      return interaction.reply({ 
+        embeds: [createErrorEmbed('Error', 'You need to be in a voice channel to skip music!')],
+        ephemeral: true
+      });
+    }
+
+    const queue = data.musicQueues.get(guild.id);
+    if (!queue) {
+      return interaction.reply({ 
+        embeds: [createErrorEmbed('Error', 'There is no music playing!')],
+        ephemeral: true
+      });
+    }
+
+    if (queue.player) {
+      queue.player.stop();
+      await interaction.reply({ 
+        embeds: [createMusicEmbed('Skipped', '⏭️ Skipped the current song!')]
+      });
+    }
+  }
+
+  if (commandName === 'stop') {
+    const voiceChannel = member.voice.channel;
+    if (!voiceChannel) {
+      return interaction.reply({ 
+        embeds: [createErrorEmbed('Error', 'You need to be in a voice channel to stop music!')],
+        ephemeral: true
+      });
+    }
+
+    const queue = data.musicQueues.get(guild.id);
+    if (!queue) {
+      return interaction.reply({ 
+        embeds: [createErrorEmbed('Error', 'There is no music playing!')],
+        ephemeral: true
+      });
+    }
+
+    queue.songs = [];
+    if (queue.player) {
+      queue.player.stop();
+    }
+    if (queue.connection) {
+      queue.connection.destroy();
+    }
+    data.musicQueues.delete(guild.id);
+
+    await interaction.reply({ 
+      embeds: [createMusicEmbed('Stopped', '⏹️ Stopped the music and cleared the queue!')]
+    });
+  }
+
+  if (commandName === 'queue') {
+    const queue = data.musicQueues.get(guild.id);
+    if (!queue || queue.songs.length === 0) {
+      return interaction.reply({ 
+        embeds: [createErrorEmbed('Error', 'There is no music in the queue!')],
+        ephemeral: true
+      });
+    }
+
+    const embed = createMusicEmbed('Music Queue', `Now Playing: **[${queue.songs[0].title}](${queue.songs[0].url})**`)
+      .setThumbnail(queue.songs[0].thumbnail)
+      .setDescription(queue.songs.slice(1).map((song, i) => 
+        `${i + 1}. [${song.title}](${song.url}) (Requested by ${song.requestedBy})`).join('\n'))
+      .setFooter({ text: `Total songs: ${queue.songs.length}` });
+
+    interaction.reply({ embeds: [embed] });
+  }
+
+  // Ticket system slash commands
+  if (commandName === 'ticket') {
+    if (!member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return interaction.reply({ 
+        embeds: [createErrorEmbed('Permission Denied', 'You need administrator permissions to configure tickets.')],
+        ephemeral: true
+      });
+    }
+
+    const setup = getGuildData(guild.id, 'tickets');
+    const description = options.getString('description');
+    const viewerRole = options.getRole('viewerrole');
+    const category = options.getChannel('category');
+    const logChannel = options.getChannel('logchannel');
+
+    if (description) {
+      setup.description = description;
+      await interaction.reply({ 
+        embeds: [createSuccessEmbed('Ticket Message Set', 'The ticket message has been updated successfully!')],
+        ephemeral: true
+      });
+    }
+
+    if (viewerRole) {
+      setup.viewerRoleId = viewerRole.id;
+      await interaction.reply({ 
+        embeds: [createSuccessEmbed('Viewer Role Set', `The ticket viewer role has been set to ${viewerRole}`)],
+        ephemeral: true
+      });
+    }
+
+    if (category) {
+      if (category.type !== ChannelType.GuildText) {
+        return interaction.reply({ 
+          embeds: [createErrorEmbed('Invalid Channel', 'Please select a text channel within the desired category.')],
+          ephemeral: true
+        });
+      }
+      setup.categoryId = category.parentId || category.id;
+      await interaction.reply({ 
+        embeds: [createSuccessEmbed('Category Set', `Ticket category has been set to ${category.parent ? category.parent.name : category.name}`)],
+        ephemeral: true
+      });
+    }
+
+    if (logChannel) {
+      if (logChannel.type !== ChannelType.GuildText) {
+        return interaction.reply({ 
+          embeds: [createErrorEmbed('Invalid Channel', 'Please select a text channel for logs.')],
+          ephemeral: true
+        });
+      }
+      setup.logChannelId = logChannel.id;
+      await interaction.reply({ 
+        embeds: [createSuccessEmbed('Log Channel Set', `Ticket log channel set to ${logChannel}`)],
+        ephemeral: true
+      });
+    }
+
+    if (!description && !viewerRole && !category && !logChannel) {
+      await interaction.reply({ 
+        embeds: [createInfoEmbed('Ticket System', 'Configure the ticket system using the options below.')],
+        ephemeral: true
+      });
+    }
+  }
+
+  // Application system slash commands
+  if (commandName === 'application') {
+    if (!member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return interaction.reply({ 
+        embeds: [createErrorEmbed('Permission Denied', 'You need administrator permissions to configure applications.')],
+        ephemeral: true
+      });
+    }
+
+    const app = getGuildData(guild.id, 'applications');
+    const question = options.getString('addquestion');
+    const optionsStr = options.getString('setoptions');
+    const appChannel = options.getChannel('setchannel');
+
+    if (question) {
+      app.questions.push(question);
+      await interaction.reply({ 
+        embeds: [createSuccessEmbed('Question Added', `Added question: ${question}`)],
+        ephemeral: true
+      });
+    }
+
+    if (optionsStr) {
+      const optionsList = optionsStr.split(',').map(opt => opt.trim());
+      
+      app.options = {};
+      for (const opt of optionsList) {
+        if (opt.includes('|')) {
+          const [name, cooldownStr] = opt.split('|').map(x => x.trim());
+          
+          const ms = parseTimeToMs(cooldownStr.toLowerCase());
+          if (ms !== null) {
+            app.options[name] = Math.floor(ms / 1000); // Convert to seconds
+          } else {
+            app.options[name] = 0;
+            await interaction.followUp({ 
+              embeds: [createErrorEmbed('Invalid Cooldown', 
+                `Cooldown must be in days (e.g., 1d, 3d). Using 0 days for "${name}".`)],
+              ephemeral: true
+            });
+          }
+        } else {
+          app.options[opt] = 0;
+        }
+      }
+      
+      const formattedOptions = Object.entries(app.options).map(([name, cd]) => {
+        return `• ${name}: ${formatCooldown(cd)} cooldown`;
+      });
+      
+      await interaction.reply({ 
+        embeds: [createSuccessEmbed('Options Set', 
+          `Application options updated successfully!\n\n${formattedOptions.join('\n')}`)],
+        ephemeral: true
+      });
+    }
+
+    if (appChannel) {
+      if (appChannel.type !== ChannelType.GuildText) {
+        return interaction.reply({ 
+          embeds: [createErrorEmbed('Invalid Channel', 'Please select a text channel for applications.')],
+          ephemeral: true
+        });
+      }
+      app.channelId = appChannel.id;
+      await interaction.reply({ 
+        embeds: [createSuccessEmbed('Channel Set', `Application log channel set to ${appChannel}`)],
+        ephemeral: true
+      });
+    }
+
+    if (!question && !optionsStr && !appChannel) {
+      await interaction.reply({ 
+        embeds: [createInfoEmbed('Application System', 'Configure the application system using the options below.')],
+        ephemeral: true
+      });
+    }
+  }
+});
+
+// Message command handler (legacy)
 client.on('messageCreate', async message => {
   if (message.author.bot || !message.guild) return;
 
@@ -1240,12 +1557,12 @@ client.on('interactionCreate', async interaction => {
   }
 
   // Application system interactions
-  if (interaction.isButton() && interaction.customId.startsWith('app_')) {
+  if (interaction.isButton() && interaction.customId.startsWith('app_') && !interaction.customId.includes('_accept_') && !interaction.customId.includes('_reject_') && !interaction.customId.includes('_ticket_')) {
     const app = getGuildData(interaction.guild.id, 'applications');
     const option = interaction.customId.slice(4);
     const userId = interaction.user.id;
 
-    // Fix: Check if the button is for application options
+    // Check if the button is for application options
     if (!app.options[option]) {
       return interaction.reply({
         embeds: [createErrorEmbed('Invalid Option', 'This application option is not configured.')],
@@ -1253,6 +1570,7 @@ client.on('interactionCreate', async interaction => {
       });
     }
 
+    // Check cooldown
     if (app.cooldowns.has(option) && app.cooldowns.get(option).has(userId)) {
       const remaining = app.cooldowns.get(option).get(userId) - Date.now();
       if (remaining > 0) {
@@ -1284,14 +1602,22 @@ client.on('interactionCreate', async interaction => {
       data.userStates.set(userId, userState);
 
       await dmChannel.send({ 
-        embeds: [createApplicationEmbed('Application Started', 'Please answer the following questions:')]
+        embeds: [createApplicationEmbed('Application Started', `You're applying for: **${option}**\n\nPlease answer the following questions:`)],
+        components: [
+          new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId('cancel_application')
+              .setLabel('Cancel Application')
+              .setStyle(ButtonStyle.Danger)
+          )
+        ]
       });
 
       const responses = [];
       for (let i = 0; i < app.questions.length; i++) {
         const question = app.questions[i];
         await dmChannel.send({ 
-          embeds: [createApplicationEmbed(`Question ${i + 1}`, question)]
+          embeds: [createApplicationEmbed(`Question ${i + 1}/${app.questions.length}`, question)]
         });
 
         try {
@@ -1300,7 +1626,18 @@ client.on('interactionCreate', async interaction => {
             max: 1,
             time: 300000
           });
-          responses.push(collected.first().content);
+          
+          const response = collected.first();
+          if (response.content.toLowerCase() === 'cancel') {
+            await dmChannel.send({ 
+              embeds: [createErrorEmbed('Application Cancelled', 'Your application has been cancelled.')]
+            });
+            userState.applicationActive = false;
+            data.userStates.set(userId, userState);
+            return;
+          }
+          
+          responses.push(response.content);
         } catch {
           await dmChannel.send({ 
             embeds: [createErrorEmbed('Timed Out', 'Application timed out due to inactivity.')]
@@ -1377,13 +1714,13 @@ client.on('interactionCreate', async interaction => {
   }
 
   // Application response buttons
-  if (interaction.isButton() && interaction.customId.startsWith('app_')) {
+  if (interaction.isButton() && (interaction.customId.startsWith('app_accept_') || interaction.customId.startsWith('app_reject_') || interaction.customId.startsWith('app_ticket_'))) {
     const parts = interaction.customId.split('_');
-    if (parts.length < 4) return; // Fix: Ensure we have all parts
+    if (parts.length < 4) return;
     
     const action = parts[1];
     const userId = parts[2];
-    const option = parts.slice(3).join('_'); // Fix: Handle options with underscores
+    const option = parts.slice(3).join('_');
     
     const member = await interaction.guild.members.fetch(userId).catch(() => null);
     
@@ -1541,10 +1878,10 @@ client.on('interactionCreate', async interaction => {
   // Application rejection reason modal
   if (interaction.isModalSubmit() && interaction.customId.startsWith('app_reject_reason_')) {
     const parts = interaction.customId.split('_');
-    if (parts.length < 4) return; // Fix: Ensure we have all parts
+    if (parts.length < 4) return;
     
     const userId = parts[3];
-    const option = parts.slice(4).join('_'); // Fix: Handle options with underscores
+    const option = parts.slice(4).join('_');
     
     const reason = interaction.fields.getTextInputValue('reject_reason');
     const member = await interaction.guild.members.fetch(userId).catch(() => null);
@@ -1583,6 +1920,21 @@ client.on('interactionCreate', async interaction => {
       await interaction.reply({
         embeds: [createErrorEmbed('Error', 'Could not DM the user about the rejection.')],
         ephemeral: true
+      });
+    }
+  }
+
+  // Cancel application button
+  if (interaction.isButton() && interaction.customId === 'cancel_application') {
+    const userId = interaction.user.id;
+    const userState = data.userStates.get(userId) || {};
+    
+    if (userState.applicationActive) {
+      userState.applicationActive = false;
+      data.userStates.set(userId, userState);
+      
+      await interaction.reply({
+        embeds: [createErrorEmbed('Application Cancelled', 'Your application has been cancelled.')]
       });
     }
   }
