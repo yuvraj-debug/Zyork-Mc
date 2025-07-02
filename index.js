@@ -17,7 +17,7 @@ const {
   TextInputStyle
 } = require('discord.js');
 const ytdl = require('ytdl-core');
-const ytsr = require('ytsr');
+const ytSearch = require('yt-search'); // Replaced ytsr with yt-search
 const { createAudioPlayer, createAudioResource, joinVoiceChannel, NoSubscriberBehavior, AudioPlayerStatus } = require('@discordjs/voice');
 const { REST, Routes } = require('discord.js');
 
@@ -318,14 +318,15 @@ client.on('interactionCreate', async interaction => {
       if (ytdl.validateURL(query)) {
         songInfo = await ytdl.getInfo(query);
       } else {
-        const searchResults = await ytsr(query, { limit: 1 });
-        if (!searchResults.items || searchResults.items.length === 0) {
+        // Updated YouTube search using yt-search
+        const searchResults = await ytSearch(query);
+        if (!searchResults.videos || searchResults.videos.length === 0) {
           return interaction.reply({ 
             embeds: [createErrorEmbed('Error', 'No results found for your search!')],
             ephemeral: true
           });
         }
-        const video = searchResults.items[0];
+        const video = searchResults.videos[0];
         songInfo = await ytdl.getInfo(video.url);
       }
 
@@ -1193,13 +1194,14 @@ client.on('messageCreate', async message => {
       if (ytdl.validateURL(query)) {
         songInfo = await ytdl.getInfo(query);
       } else {
-        const searchResults = await ytsr(query, { limit: 1 });
-        if (!searchResults.items || searchResults.items.length === 0) {
+        // Updated YouTube search using yt-search
+        const searchResults = await ytSearch(query);
+        if (!searchResults.videos || searchResults.videos.length === 0) {
           return message.reply({ 
             embeds: [createErrorEmbed('Error', 'No results found for your search!')]
           });
         }
-        const video = searchResults.items[0];
+        const video = searchResults.videos[0];
         songInfo = await ytdl.getInfo(video.url);
       }
 
