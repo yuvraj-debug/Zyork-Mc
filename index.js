@@ -16,9 +16,6 @@ const {
   TextInputBuilder,
   TextInputStyle
 } = require('discord.js');
-const ytdl = require('ytdl-core');
-const ytSearch = require('yt-search');
-const { createAudioPlayer, createAudioResource, joinVoiceChannel, NoSubscriberBehavior, AudioPlayerStatus } = require('@discordjs/voice');
 const { REST, Routes } = require('discord.js');
 
 // Keep-alive server
@@ -53,7 +50,6 @@ const data = {
       { question: '2 + 2 * 2 = ?', answer: '6' }
     ]
   },
-  musicQueues: new Map(),
   ratings: new Map()
 };
 
@@ -95,13 +91,6 @@ const formatCooldown = (seconds) => {
   return `${days}d`;
 };
 
-const formatDuration = (seconds) => {
-  if (!seconds) return 'Live';
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
-  return `${minutes}:${remainingSeconds < 10 ? '0' : ''}${remainingSeconds}`;
-};
-
 // UI Utility Functions
 const createSuccessEmbed = (title, description) => new EmbedBuilder()
   .setTitle(`✅ ${title}`)
@@ -139,42 +128,12 @@ const createApplicationEmbed = (title, description) => new EmbedBuilder()
   .setColor('#5865F2')
   .setTimestamp();
 
-const createMusicEmbed = (title, description) => new EmbedBuilder()
-  .setTitle(`🎵 ${title}`)
-  .setDescription(description)
-  .setColor('#9B59B6')
-  .setTimestamp();
-
 // Register slash commands
 const registerCommands = async () => {
   try {
     const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
     
     const commands = [
-      {
-        name: 'play',
-        description: 'Play a song from YouTube',
-        options: [
-          {
-            name: 'query',
-            description: 'Song name or YouTube URL',
-            type: 3,
-            required: true
-          }
-        ]
-      },
-      {
-        name: 'skip',
-        description: 'Skip the current song'
-      },
-      {
-        name: 'stop',
-        description: 'Stop the music and clear queue'
-      },
-      {
-        name: 'queue',
-        description: 'Show the current music queue'
-      },
       {
         name: 'ticket',
         description: 'Configure ticket system',
@@ -273,94 +232,6 @@ const registerCommands = async () => {
     console.error('Error refreshing commands:', error);
   }
 };
-
-// Music player function
-async function playMusic(guild, song) {
-  const queue = data.musicQueues.get(guild.id);
-  if (!song) {
-    if (queue.connection) {
-      queue.connection.destroy();
-    }
-    data.musicQueues.delete(guild.id);
-    return;
-  }
-
-  queue.playing = true;
-
-  try {
-    // Create or reuse connection
-    if (!queue.connection) {
-      queue.connection = joinVoiceChannel({
-        channelId: queue.voiceChannel.id,
-        guildId: guild.id,
-        adapterCreator: guild.voiceAdapterCreator,
-      });
-    }
-
-    // Create audio player if not exists
-    if (!queue.player) {
-      queue.player = createAudioPlayer({
-        behaviors: {
-          noSubscriber: NoSubscriberBehavior.Pause,
-        },
-      });
-
-      queue.connection.subscribe(queue.player);
-    }
-
-    // Handle player events
-    queue.player.on(AudioPlayerStatus.Idle, () => {
-      queue.songs.shift();
-      playMusic(guild, queue.songs[0]);
-    });
-
-    queue.player.on('error', error => {
-      console.error('Player error:', error);
-      queue.textChannel.send({ 
-        embeds: [createErrorEmbed('Error', 'There was an error playing the song!')]
-      });
-      queue.songs.shift();
-      playMusic(guild, queue.songs[0]);
-    });
-
-    // Create audio resource with better quality settings
-    const stream = ytdl(song.url, {
-      filter: 'audioonly',
-      quality: 'highestaudio',
-      highWaterMark: 1 << 25,
-      dlChunkSize: 0,
-      requestOptions: {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36'
-        }
-      }
-    });
-
-    const resource = createAudioResource(stream, {
-      inlineVolume: true,
-    });
-
-    resource.volume.setVolume(queue.volume / 5);
-    queue.player.play(resource);
-    
-    queue.textChannel.send({ 
-      embeds: [createMusicEmbed('Now Playing', `🎵 Now playing **[${song.title}](${song.url})**`)
-        .setThumbnail(song.thumbnail)
-        .addFields(
-          { name: 'Duration', value: formatDuration(song.duration), inline: true },
-          { name: 'Requested By', value: song.requestedBy.toString(), inline: true }
-        )
-      ]
-    });
-  } catch (error) {
-    console.error('Play music error:', error);
-    queue.textChannel.send({ 
-      embeds: [createErrorEmbed('Error', 'There was an error trying to play the song!')]
-    });
-    queue.songs.shift();
-    playMusic(guild, queue.songs[0]);
-  }
-}
 
 // Ticket closing function
 async function closeTicket(interaction, channel, setup, reason) {
@@ -516,8 +387,7 @@ client.on('interactionCreate', async interaction => {
       .addFields(
         { name: '🎟️ Ticket System', value: '`/ticket` - Configure ticket system\n`/ticket description` - Set panel description\n`/ticket viewerrole` - Set viewer role\n`/ticket category` - Set ticket category\n`/ticket logchannel` - Set log channel\n`/ticket ratingchannel` - Set rating channel', inline: false },
         { name: '📝 Applications', value: '`/application` - Configure applications\n`/application addquestion` - Add question\n`/application setoptions` - Set options\n`/application setchannel` - Set log channel', inline: false },
-        { name: '🎮 Games', value: '`/guess` - Number guessing game\n`/trivia` - Trivia questions\n`/scramble` - Word scramble\n`/rps` - Rock paper scissors', inline: false },
-        { name: '🎵 Music', value: '`/play` - Play music\n`/skip` - Skip song\n`/stop` - Stop music\n`/queue` - Show queue', inline: false }
+        { name: '🎮 Games', value: '`/guess` - Number guessing game\n`/trivia` - Trivia questions\n`/scramble` - Word scramble\n`/rps` - Rock paper scissors', inline: false }
       )
       .setFooter({ 
         text: 'Use the slash commands for most functionality', 
@@ -526,159 +396,6 @@ client.on('interactionCreate', async interaction => {
       .setTimestamp();
 
     return interaction.reply({ embeds: [embed], ephemeral: true });
-  }
-
-  // Music commands
-  if (commandName === 'play') {
-    const query = options.getString('query');
-    const voiceChannel = member.voice.channel;
-    
-    if (!voiceChannel) {
-      return interaction.reply({ 
-        embeds: [createErrorEmbed('Error', 'You need to be in a voice channel to play music!')],
-        ephemeral: true
-      });
-    }
-
-    try {
-      // Check if queue exists for this guild
-      if (!data.musicQueues.has(guild.id)) {
-        data.musicQueues.set(guild.id, {
-          textChannel: interaction.channel,
-          voiceChannel: voiceChannel,
-          connection: null,
-          player: null,
-          songs: [],
-          volume: 5,
-          playing: false
-        });
-      }
-
-      const queue = data.musicQueues.get(guild.id);
-      
-      // Validate URL or search
-      let songInfo;
-      if (ytdl.validateURL(query)) {
-        songInfo = await ytdl.getInfo(query);
-      } else {
-        const searchResults = await ytSearch(query);
-        if (!searchResults.videos || searchResults.videos.length === 0) {
-          return interaction.reply({ 
-            embeds: [createErrorEmbed('Error', 'No results found for your search!')],
-            ephemeral: true
-          });
-        }
-        const video = searchResults.videos[0];
-        songInfo = await ytdl.getInfo(video.url);
-      }
-
-      const song = {
-        title: songInfo.videoDetails.title,
-        url: songInfo.videoDetails.video_url,
-        duration: songInfo.videoDetails.lengthSeconds,
-        requestedBy: interaction.user,
-        thumbnail: songInfo.videoDetails.thumbnails[0].url
-      };
-
-      queue.songs.push(song);
-
-      if (!queue.playing) {
-        await interaction.reply({ 
-          embeds: [createMusicEmbed('Playing', `🎵 Now playing **${song.title}**`)
-            .setThumbnail(song.thumbnail)
-            .setURL(song.url)
-          ]
-        });
-        playMusic(guild, queue.songs[0]);
-      } else {
-        await interaction.reply({ 
-          embeds: [createMusicEmbed('Added to Queue', `🎵 Added **${song.title}** to the queue!`)
-            .setThumbnail(song.thumbnail)
-            .setURL(song.url)
-          ]
-        });
-      }
-    } catch (error) {
-      console.error('Music play error:', error);
-      interaction.reply({ 
-        embeds: [createErrorEmbed('Error', 'There was an error trying to play that song!')],
-        ephemeral: true
-      });
-    }
-  }
-
-  if (commandName === 'skip') {
-    const voiceChannel = member.voice.channel;
-    if (!voiceChannel) {
-      return interaction.reply({ 
-        embeds: [createErrorEmbed('Error', 'You need to be in a voice channel to skip music!')],
-        ephemeral: true
-      });
-    }
-
-    const queue = data.musicQueues.get(guild.id);
-    if (!queue) {
-      return interaction.reply({ 
-        embeds: [createErrorEmbed('Error', 'There is no music playing!')],
-        ephemeral: true
-      });
-    }
-
-    if (queue.player) {
-      queue.player.stop();
-      await interaction.reply({ 
-        embeds: [createMusicEmbed('Skipped', '⏭️ Skipped the current song!')]
-      });
-    }
-  }
-
-  if (commandName === 'stop') {
-    const voiceChannel = member.voice.channel;
-    if (!voiceChannel) {
-      return interaction.reply({ 
-        embeds: [createErrorEmbed('Error', 'You need to be in a voice channel to stop music!')],
-        ephemeral: true
-      });
-    }
-
-    const queue = data.musicQueues.get(guild.id);
-    if (!queue) {
-      return interaction.reply({ 
-        embeds: [createErrorEmbed('Error', 'There is no music playing!')],
-        ephemeral: true
-      });
-    }
-
-    queue.songs = [];
-    if (queue.player) {
-      queue.player.stop();
-    }
-    if (queue.connection) {
-      queue.connection.destroy();
-    }
-    data.musicQueues.delete(guild.id);
-
-    await interaction.reply({ 
-      embeds: [createMusicEmbed('Stopped', '⏹️ Stopped the music and cleared the queue!')]
-    });
-  }
-
-  if (commandName === 'queue') {
-    const queue = data.musicQueues.get(guild.id);
-    if (!queue || queue.songs.length === 0) {
-      return interaction.reply({ 
-        embeds: [createErrorEmbed('Error', 'There is no music in the queue!')],
-        ephemeral: true
-      });
-    }
-
-    const embed = createMusicEmbed('Music Queue', `Now Playing: **[${queue.songs[0].title}](${queue.songs[0].url})**`)
-      .setThumbnail(queue.songs[0].thumbnail)
-      .setDescription(queue.songs.slice(1).map((song, i) => 
-        `${i + 1}. [${song.title}](${song.url}) (Requested by ${song.requestedBy})`).join('\n'))
-      .setFooter({ text: `Total songs: ${queue.songs.length}` });
-
-    interaction.reply({ embeds: [embed] });
   }
 
   // Ticket system slash commands
@@ -937,7 +654,6 @@ client.on('messageCreate', async message => {
           { name: '🎟️ Ticket System', value: '`!ticket`, `!option`, `!ticketviewer`, `!ticketcategory`, `!ticketlog`, `!deployticketpanel`', inline: false },
           { name: '📝 Applications', value: '`!addques`, `!setoptions`, `!setchannel`, `!deployapp`, `!resetapp`', inline: false },
           { name: '🎮 Games', value: '`!guess`, `!trivia`, `!scramble`, `!rps`', inline: false },
-          { name: '🎵 Music', value: '`!play`, `!stop`, `!skip`, `!queue`', inline: false },
           { name: '🔧 Utilities', value: '`!dm`, `!msg`', inline: false }
         )
         .setFooter({ 
@@ -1461,148 +1177,6 @@ client.on('messageCreate', async message => {
         `You chose **${player}**, I chose **${botPick}** → ${result}`)
     ]});
   }
-
-  // === MUSIC COMMANDS ===
-  if (lc.startsWith('!play ')) {
-    const voiceChannel = message.member.voice.channel;
-    if (!voiceChannel) {
-      return message.reply({ 
-        embeds: [createErrorEmbed('Error', 'You need to be in a voice channel to play music!')]
-      });
-    }
-
-    const query = raw.slice(6).trim();
-    if (!query) {
-      return message.reply({ 
-        embeds: [createErrorEmbed('Error', 'Please provide a YouTube URL or song name to play!')]
-      });
-    }
-
-    try {
-      if (!data.musicQueues.has(guild.id)) {
-        data.musicQueues.set(guild.id, {
-          textChannel: channel,
-          voiceChannel: voiceChannel,
-          connection: null,
-          player: null,
-          songs: [],
-          volume: 5,
-          playing: false
-        });
-      }
-
-      const queue = data.musicQueues.get(guild.id);
-      
-      let songInfo;
-      if (ytdl.validateURL(query)) {
-        songInfo = await ytdl.getInfo(query);
-      } else {
-        const searchResults = await ytSearch(query);
-        if (!searchResults.videos || searchResults.videos.length === 0) {
-          return message.reply({ 
-            embeds: [createErrorEmbed('Error', 'No results found for your search!')]
-          });
-        }
-        const video = searchResults.videos[0];
-        songInfo = await ytdl.getInfo(video.url);
-      }
-
-      const song = {
-        title: songInfo.videoDetails.title,
-        url: songInfo.videoDetails.video_url,
-        duration: songInfo.videoDetails.lengthSeconds,
-        requestedBy: message.author,
-        thumbnail: songInfo.videoDetails.thumbnails[0].url
-      };
-
-      queue.songs.push(song);
-
-      if (!queue.playing) {
-        playMusic(guild, queue.songs[0]);
-      } else {
-        message.reply({ 
-          embeds: [createMusicEmbed('Added to Queue', `🎵 Added **${song.title}** to the queue!`)
-            .setThumbnail(song.thumbnail)
-            .setURL(song.url)
-          ]
-        });
-      }
-    } catch (error) {
-      console.error('Music play error:', error);
-      message.reply({ 
-        embeds: [createErrorEmbed('Error', 'There was an error trying to play that song!')]
-      });
-    }
-  }
-
-  if (lc === '!stop') {
-    const voiceChannel = message.member.voice.channel;
-    if (!voiceChannel) {
-      return message.reply({ 
-        embeds: [createErrorEmbed('Error', 'You need to be in a voice channel to stop music!')]
-      });
-    }
-
-    const queue = data.musicQueues.get(guild.id);
-    if (!queue) {
-      return message.reply({ 
-        embeds: [createErrorEmbed('Error', 'There is no music playing!')]
-      });
-    }
-
-    queue.songs = [];
-    if (queue.player) {
-      queue.player.stop();
-    }
-    if (queue.connection) {
-      queue.connection.destroy();
-    }
-    data.musicQueues.delete(guild.id);
-
-    message.reply({ 
-      embeds: [createMusicEmbed('Stopped', '⏹️ Stopped the music and cleared the queue!')]
-    });
-  }
-
-  if (lc === '!skip') {
-    const voiceChannel = message.member.voice.channel;
-    if (!voiceChannel) {
-      return message.reply({ 
-        embeds: [createErrorEmbed('Error', 'You need to be in a voice channel to skip music!')]
-      });
-    }
-
-    const queue = data.musicQueues.get(guild.id);
-    if (!queue) {
-      return message.reply({ 
-        embeds: [createErrorEmbed('Error', 'There is no music playing!')]
-      });
-    }
-
-    if (queue.player) {
-      queue.player.stop();
-      message.reply({ 
-        embeds: [createMusicEmbed('Skipped', '⏭️ Skipped the current song!')]
-      });
-    }
-  }
-
-  if (lc === '!queue') {
-    const queue = data.musicQueues.get(guild.id);
-    if (!queue || queue.songs.length === 0) {
-      return message.reply({ 
-        embeds: [createErrorEmbed('Error', 'There is no music in the queue!')]
-      });
-    }
-
-    const embed = createMusicEmbed('Music Queue', `Now Playing: **[${queue.songs[0].title}](${queue.songs[0].url})**`)
-      .setThumbnail(queue.songs[0].thumbnail)
-      .setDescription(queue.songs.slice(1).map((song, i) => 
-        `${i + 1}. [${song.title}](${song.url}) (Requested by ${song.requestedBy})`).join('\n'))
-      .setFooter({ text: `Total songs: ${queue.songs.length}` });
-
-    message.reply({ embeds: [embed] });
-  }
 });
 
 // Interaction handling
@@ -1834,9 +1408,12 @@ client.on('interactionCreate', async interaction => {
   }
 
   // Application system interactions
-  if (interaction.isButton() && interaction.customId.startsWith('app_') && !interaction.customId.includes('_accept_') && !interaction.customId.includes('_reject_') && !interaction.customId.includes('_ticket_')) {
+  if (interaction.isButton() && interaction.customId.startsWith('app_')) {
+    const parts = interaction.customId.split('_');
+    if (parts.length < 2) return;
+    
     const app = getGuildData(interaction.guild.id, 'applications');
-    const option = interaction.customId.slice(4);
+    const option = parts.slice(1).join('_');
     const userId = interaction.user.id;
 
     if (!app.options[option]) {
@@ -1846,13 +1423,13 @@ client.on('interactionCreate', async interaction => {
       });
     }
 
-    if (app.cooldowns.has(option) && app.cooldowns.get(option).has(userId)) {
-      const remaining = app.cooldowns.get(option).get(userId) - Date.now();
-      if (remaining > 0) {
-        const days = Math.ceil(remaining / (1000 * 60 * 60 * 24));
+    if (app.cooldowns.has(option) ){
+      const userCooldown = app.cooldowns.get(option).get(userId);
+      if (userCooldown && userCooldown > Date.now()) {
+        const remaining = Math.ceil((userCooldown - Date.now()) / (1000 * 60 * 60 * 24));
         return interaction.reply({
           embeds: [createErrorEmbed('Cooldown Active', 
-            `You're on cooldown for this application. Try again in ${days} day(s).`)],
+            `You're on cooldown for this application. Try again in ${remaining} day(s).`)],
           ephemeral: true
         });
       }
