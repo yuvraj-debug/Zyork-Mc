@@ -19,6 +19,96 @@ const {
 const ytdl = require('ytdl-core');
 const ytsr = require('ytsr');
 const { createAudioPlayer, createAudioResource, joinVoiceChannel, NoSubscriberBehavior, AudioPlayerStatus } = require('@discordjs/voice');
+// Add this near the top with other require statements
+const { REST, Routes } = require('discord.js');
+
+// Add this after client.login() or in your ready event
+const registerCommands = async () => {
+  try {
+    const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+    
+    const commands = [
+      {
+        name: 'play',
+        description: 'Play a song from YouTube',
+        options: [
+          {
+            name: 'query',
+            description: 'Song name or YouTube URL',
+            type: 3, // STRING type
+            required: true
+          }
+        ]
+      },
+      {
+        name: 'skip',
+        description: 'Skip the current song'
+      },
+      {
+        name: 'stop',
+        description: 'Stop the music and clear queue'
+      },
+      {
+        name: 'queue',
+        description: 'Show the current music queue'
+      }
+    ];
+
+    console.log('Started refreshing application (/) commands.');
+    await rest.put(
+      Routes.applicationCommands(client.user.id),
+      { body: commands }
+    );
+    console.log('Successfully reloaded application (/) commands.');
+  } catch (error) {
+    console.error('Error refreshing commands:', error);
+  }
+};
+
+// Call this when your bot starts
+client.once('ready', () => {
+  console.log(`🤖 Logged in as ${client.user.tag}`);
+  registerCommands();
+});
+
+// Add this new interaction handler for slash commands
+client.on('interactionCreate', async interaction => {
+  if (!interaction.isCommand()) return;
+
+  const { commandName, options } = interaction;
+
+  // Music commands
+  if (commandName === 'play') {
+    const query = options.getString('query');
+    // Add your play logic here using the query
+    await interaction.reply(`Searching for: ${query}`);
+    
+    // Example implementation:
+    const voiceChannel = interaction.member.voice.channel;
+    if (!voiceChannel) {
+      return interaction.followUp({ 
+        embeds: [createErrorEmbed('Error', 'You need to be in a voice channel to play music!')]
+      });
+    }
+
+    // ... rest of your play command logic
+  }
+
+  if (commandName === 'skip') {
+    // Add your skip logic here
+    await interaction.reply('Skipping current song...');
+  }
+
+  if (commandName === 'stop') {
+    // Add your stop logic here
+    await interaction.reply('Stopping music...');
+  }
+
+  if (commandName === 'queue') {
+    // Add your queue logic here
+    await interaction.reply('Showing queue...');
+  }
+});
 
 // Keep-alive server
 const app = express();
