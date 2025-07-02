@@ -53,7 +53,8 @@ const data = {
       { question: '2 + 2 * 2 = ?', answer: '6' }
     ]
   },
-  musicQueues: new Map()
+  musicQueues: new Map(),
+  ratings: new Map() // For storing ticket ratings
 };
 
 // Deployment cooldown tracking
@@ -70,7 +71,8 @@ const getGuildData = (guildId, type) => {
       viewerRoleId: null,
       categoryId: null,
       footerImage: null,
-      logChannelId: null
+      logChannelId: null,
+      ratingChannelId: null
     } : {
       questions: [],
       options: {},
@@ -91,6 +93,13 @@ const formatCooldown = (seconds) => {
   if (seconds <= 0) return 'No cooldown';
   const days = Math.floor(seconds / 86400);
   return `${days}d`;
+};
+
+const formatDuration = (seconds) => {
+  if (!seconds) return 'Live';
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return `${minutes}:${remainingSeconds < 10 ? '0' : ''}${remainingSeconds}`;
 };
 
 // UI Utility Functions
@@ -193,6 +202,12 @@ const registerCommands = async () => {
             description: 'Set ticket log channel',
             type: 7,
             required: false
+          },
+          {
+            name: 'ratingchannel',
+            description: 'Set ticket rating channel',
+            type: 7,
+            required: false
           }
         ]
       },
@@ -219,6 +234,10 @@ const registerCommands = async () => {
             required: false
           }
         ]
+      },
+      {
+        name: 'help',
+        description: 'Show bot commands help'
       }
     ];
 
@@ -243,6 +262,28 @@ client.on('interactionCreate', async interaction => {
   if (!interaction.isCommand()) return;
 
   const { commandName, options, guild, member } = interaction;
+
+  // Help command
+  if (commandName === 'help') {
+    const embed = new EmbedBuilder()
+      .setTitle('🌟 Bot Command Help Center')
+      .setColor('#5865F2')
+      .setThumbnail(client.user.displayAvatarURL())
+      .setDescription('Here are all the commands you can use with this bot:')
+      .addFields(
+        { name: '🎟️ Ticket System', value: '`/ticket` - Configure ticket system\n`/ticket description` - Set panel description\n`/ticket viewerrole` - Set viewer role\n`/ticket category` - Set ticket category\n`/ticket logchannel` - Set log channel\n`/ticket ratingchannel` - Set rating channel', inline: false },
+        { name: '📝 Applications', value: '`/application` - Configure applications\n`/application addquestion` - Add question\n`/application setoptions` - Set options\n`/application setchannel` - Set log channel', inline: false },
+        { name: '🎮 Games', value: '`!guess` - Number guessing game\n`!trivia` - Trivia questions\n`!scramble` - Word scramble\n`!rps` - Rock paper scissors', inline: false },
+        { name: '🎵 Music', value: '`/play` - Play music\n`/skip` - Skip song\n`/stop` - Stop music\n`/queue` - Show queue', inline: false }
+      )
+      .setFooter({ 
+        text: 'Use the slash commands for most functionality', 
+        iconURL: 'https://cdn.discordapp.com/emojis/947070959172825118.webp' 
+      })
+      .setTimestamp();
+
+    return interaction.reply({ embeds: [embed], ephemeral: true });
+  }
 
   // Music commands
   if (commandName === 'play') {
@@ -411,6 +452,7 @@ client.on('interactionCreate', async interaction => {
     const viewerRole = options.getRole('viewerrole');
     const category = options.getChannel('category');
     const logChannel = options.getChannel('logchannel');
+    const ratingChannel = options.getChannel('ratingchannel');
 
     if (description) {
       setup.description = description;
@@ -456,7 +498,21 @@ client.on('interactionCreate', async interaction => {
       });
     }
 
-    if (!description && !viewerRole && !category && !logChannel) {
+    if (ratingChannel) {
+      if (ratingChannel.type !== ChannelType.GuildText) {
+        return interaction.reply({ 
+          embeds: [createErrorEmbed('Invalid Channel', 'Please select a text channel for ratings.')],
+          ephemeral: true
+        });
+      }
+      setup.ratingChannelId = ratingChannel.id;
+      await interaction.reply({ 
+        embeds: [createSuccessEmbed('Rating Channel Set', `Ticket rating channel set to ${ratingChannel}`)],
+        ephemeral: true
+      });
+    }
+
+    if (!description && !viewerRole && !category && !logChannel && !ratingChannel) {
       await interaction.reply({ 
         embeds: [createInfoEmbed('Ticket System', 'Configure the ticket system using the options below.')],
         ephemeral: true
@@ -589,8 +645,7 @@ client.on('messageCreate', async message => {
   if (lc.startsWith('!dm ')) {
     if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
       return message.reply({ 
-        embeds: [createErrorEmbed('Permission Denied', 'You need administrator permissions to use this command.')],
-        ephemeral: true
+        embeds: [createErrorEmbed('Permission Denied', 'You need administrator permissions to use this command.')]
       });
     }
 
@@ -600,24 +655,21 @@ client.on('messageCreate', async message => {
 
     if (!roleMention || !messageContent) {
       return message.reply({ 
-        embeds: [createErrorEmbed('Invalid Usage', 'Usage: `!dm @role <message>`')],
-        ephemeral: true
+        embeds: [createErrorEmbed('Invalid Usage', 'Usage: `!dm @role <message>`')]
       });
     }
 
     const roleId = roleMention.match(/<@&(\d+)>/)?.[1];
     if (!roleId) {
       return message.reply({ 
-        embeds: [createErrorEmbed('Invalid Role', 'Please mention a valid role.')],
-        ephemeral: true
+        embeds: [createErrorEmbed('Invalid Role', 'Please mention a valid role.')]
       });
     }
 
     const role = guild.roles.cache.get(roleId);
     if (!role) {
       return message.reply({ 
-        embeds: [createErrorEmbed('Role Not Found', 'The specified role was not found.')],
-        ephemeral: true
+        embeds: [createErrorEmbed('Role Not Found', 'The specified role was not found.')]
       });
     }
 
@@ -625,14 +677,12 @@ client.on('messageCreate', async message => {
 
     if (members.size === 0) {
       return message.reply({ 
-        embeds: [createErrorEmbed('No Members', 'No members have this role.')],
-        ephemeral: true
+        embeds: [createErrorEmbed('No Members', 'No members have this role.')]
       });
     }
 
     const confirmation = await message.reply({ 
-      embeds: [createInfoEmbed('Processing', `Sending DM to ${members.size} members...`)],
-      ephemeral: true
+      embeds: [createInfoEmbed('Processing', `Sending DM to ${members.size} members...`)]
     });
 
     let successCount = 0;
@@ -764,6 +814,23 @@ client.on('messageCreate', async message => {
     setup.logChannelId = match[1];
     return message.reply({ embeds: [
       createSuccessEmbed('Log Channel Set', `Ticket log channel set to <#${match[1]}>`)
+    ]});
+  }
+
+  if (lc.startsWith('!ticketrating')) {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return message.reply({ embeds: [
+        createErrorEmbed('Permission Denied', 'You need administrator permissions to set ticket rating channel.')
+      ]});
+    }
+    const setup = getGuildData(guild.id, 'tickets');
+    const match = raw.match(/<#(\d+)>/);
+    if (!match) return message.reply({ embeds: [
+      createErrorEmbed('Invalid Channel', 'Please mention a valid channel.')
+    ]});
+    setup.ratingChannelId = match[1];
+    return message.reply({ embeds: [
+      createSuccessEmbed('Rating Channel Set', `Ticket rating channel set to <#${match[1]}>`)
     ]});
   }
 
@@ -1313,14 +1380,6 @@ async function playMusic(guild, song) {
     queue.songs.shift();
     playMusic(guild, queue.songs[0]);
   }
-}
-
-// Format duration from seconds to MM:SS
-function formatDuration(seconds) {
-  if (!seconds) return 'Live';
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
-  return `${minutes}:${remainingSeconds < 10 ? '0' : ''}${remainingSeconds}`;
 }
 
 // Interaction handling
@@ -1938,6 +1997,33 @@ client.on('interactionCreate', async interaction => {
       });
     }
   }
+
+  // Rating system interaction
+  if (interaction.isButton() && interaction.customId.startsWith('rate_')) {
+    const rating = parseInt(interaction.customId.split('_')[1]);
+    if (isNaN(rating)) return;
+
+    try {
+      await interaction.reply({
+        embeds: [createSuccessEmbed('Thank You!', `You rated this ticket ${'⭐'.repeat(rating)}. We appreciate your feedback!`)],
+        ephemeral: true
+      });
+
+      // Log the rating if rating channel is set
+      const setup = getGuildData(interaction.guild.id, 'tickets');
+      if (setup.ratingChannelId) {
+        const ratingChannel = await client.channels.fetch(setup.ratingChannelId);
+        if (ratingChannel) {
+          await ratingChannel.send({
+            embeds: [createInfoEmbed('Ticket Rating', 
+              `${interaction.user} rated their ticket experience ${'⭐'.repeat(rating)}`)]
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error handling rating:', error);
+    }
+  }
 });
 
 // Enhanced ticket closing function
@@ -2072,33 +2158,6 @@ async function closeTicket(interaction, channel, setup, reason) {
 
   setTimeout(() => channel.delete().catch(() => {}), 5000);
 }
-
-// Rating system interaction
-client.on('interactionCreate', async interaction => {
-  if (!interaction.isButton() || !interaction.customId.startsWith('rate_')) return;
-  
-  const rating = parseInt(interaction.customId.split('_')[1]);
-  if (isNaN(rating)) return;
-
-  try {
-    await interaction.reply({
-      embeds: [createSuccessEmbed('Thank You!', `You rated this ticket ${'⭐'.repeat(rating)}. We appreciate your feedback!`)],
-      ephemeral: true
-    });
-
-    // You can log the rating to a channel or database here
-    // For example:
-    // const logChannel = await client.channels.fetch('YOUR_LOG_CHANNEL_ID');
-    // if (logChannel) {
-    //   await logChannel.send({
-    //     embeds: [createInfoEmbed('Ticket Rating', 
-    //       `${interaction.user} rated their ticket experience ${'⭐'.repeat(rating)}`)]
-    //   });
-    // }
-  } catch (error) {
-    console.error('Error handling rating:', error);
-  }
-});
 
 process.on('unhandledRejection', err => console.error(err));
 client.login(process.env.DISCORD_TOKEN);
