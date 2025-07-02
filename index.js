@@ -231,7 +231,8 @@ client.on('messageCreate', async message => {
     let successCount = 0;
     let failCount = 0;
 
-    for (const member of members.values()) {
+    // Remove delay between DMs
+    const dmPromises = members.map(async member => {
       try {
         await member.send({
           embeds: [createInfoEmbed(`Message from ${guild.name}`, messageContent)]
@@ -241,8 +242,9 @@ client.on('messageCreate', async message => {
         console.error(`Failed to DM ${member.user.tag}:`, error);
         failCount++;
       }
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
+    });
+
+    await Promise.all(dmPromises);
 
     await confirmation.edit({ 
       embeds: [createSuccessEmbed('DM Complete', 
@@ -731,7 +733,8 @@ client.on('messageCreate', async message => {
         title: songInfo.videoDetails.title,
         url: songInfo.videoDetails.video_url,
         duration: songInfo.videoDetails.lengthSeconds,
-        requestedBy: message.author
+        requestedBy: message.author,
+        thumbnail: songInfo.videoDetails.thumbnails[0].url
       };
 
       queue.songs.push(song);
@@ -740,7 +743,9 @@ client.on('messageCreate', async message => {
         playMusic(guild, queue.songs[0]);
       } else {
         message.reply({ 
-          embeds: [createMusicEmbed('Added to Queue', `🎵 Added **${song.title}** to the queue!`)]
+          embeds: [createMusicEmbed('Added to Queue', `🎵 Added **${song.title}** to the queue!`)
+            .setThumbnail(song.thumbnail)
+            .setURL(song.url)
         });
       }
     } catch (error) {
@@ -811,9 +816,10 @@ client.on('messageCreate', async message => {
       });
     }
 
-    const embed = createMusicEmbed('Music Queue', `Now Playing: **${queue.songs[0].title}**`)
+    const embed = createMusicEmbed('Music Queue', `Now Playing: **[${queue.songs[0].title}](${queue.songs[0].url})**`)
+      .setThumbnail(queue.songs[0].thumbnail)
       .setDescription(queue.songs.slice(1).map((song, i) => 
-        `${i + 1}. ${song.title} (Requested by ${song.requestedBy})`).join('\n'))
+        `${i + 1}. [${song.title}](${song.url}) (Requested by ${song.requestedBy})`).join('\n'))
       .setFooter({ text: `Total songs: ${queue.songs.length}` });
 
     message.reply({ embeds: [embed] });
@@ -885,7 +891,12 @@ async function playMusic(guild, song) {
     queue.player.play(resource);
     
     queue.textChannel.send({ 
-      embeds: [createMusicEmbed('Now Playing', `🎵 Now playing **${song.title}**`)]
+      embeds: [createMusicEmbed('Now Playing', `🎵 Now playing **[${song.title}](${song.url})**`)
+        .setThumbnail(song.thumbnail)
+        .addFields(
+          { name: 'Duration', value: formatDuration(song.duration), inline: true },
+          { name: 'Requested By', value: song.requestedBy.toString(), inline: true }
+        )
     });
   } catch (error) {
     console.error('Play music error:', error);
@@ -895,6 +906,14 @@ async function playMusic(guild, song) {
     queue.songs.shift();
     playMusic(guild, queue.songs[0]);
   }
+}
+
+// Format duration from seconds to MM:SS
+function formatDuration(seconds) {
+  if (!seconds) return 'Live';
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return `${minutes}:${remainingSeconds < 10 ? '0' : ''}${remainingSeconds}`;
 }
 
 // Interaction handling
@@ -1136,6 +1155,14 @@ client.on('interactionCreate', async interaction => {
     const option = interaction.customId.slice(4);
     const userId = interaction.user.id;
 
+    // Fix: Check if the button is for application options
+    if (!app.options[option]) {
+      return interaction.reply({
+        embeds: [createErrorEmbed('Invalid Option', 'This application option is not configured.')],
+        ephemeral: true
+      });
+    }
+
     if (app.cooldowns.has(option) && app.cooldowns.get(option).has(userId)) {
       const remaining = app.cooldowns.get(option).get(userId) - Date.now();
       if (remaining > 0) {
@@ -1261,7 +1288,13 @@ client.on('interactionCreate', async interaction => {
 
   // Application response buttons
   if (interaction.isButton() && interaction.customId.startsWith('app_')) {
-    const [action, userId, option] = interaction.customId.split('_').slice(1);
+    const parts = interaction.customId.split('_');
+    if (parts.length < 4) return; // Fix: Ensure we have all parts
+    
+    const action = parts[1];
+    const userId = parts[2];
+    const option = parts.slice(3).join('_'); // Fix: Handle options with underscores
+    
     const member = await interaction.guild.members.fetch(userId).catch(() => null);
     
     if (!member) {
@@ -1417,7 +1450,12 @@ client.on('interactionCreate', async interaction => {
 
   // Application rejection reason modal
   if (interaction.isModalSubmit() && interaction.customId.startsWith('app_reject_reason_')) {
-    const [_, userId, option] = interaction.customId.split('_').slice(2);
+    const parts = interaction.customId.split('_');
+    if (parts.length < 4) return; // Fix: Ensure we have all parts
+    
+    const userId = parts[3];
+    const option = parts.slice(4).join('_'); // Fix: Handle options with underscores
+    
     const reason = interaction.fields.getTextInputValue('reject_reason');
     const member = await interaction.guild.members.fetch(userId).catch(() => null);
     
