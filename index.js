@@ -1220,6 +1220,7 @@ client.on('messageCreate', async message => {
           embeds: [createMusicEmbed('Added to Queue', `🎵 Added **${song.title}** to the queue!`)
             .setThumbnail(song.thumbnail)
             .setURL(song.url)
+          ]
         });
       }
     } catch (error) {
@@ -1371,6 +1372,7 @@ async function playMusic(guild, song) {
           { name: 'Duration', value: formatDuration(song.duration), inline: true },
           { name: 'Requested By', value: song.requestedBy.toString(), inline: true }
         )
+      ]
     });
   } catch (error) {
     console.error('Play music error:', error);
