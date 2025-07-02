@@ -20,10 +20,6 @@ const ytdl = require('ytdl-core');
 const ytSearch = require('yt-search');
 const { createAudioPlayer, createAudioResource, joinVoiceChannel, NoSubscriberBehavior, AudioPlayerStatus } = require('@discordjs/voice');
 const { REST, Routes } = require('discord.js');
-const youtubedl = require('youtube-dl-exec');
-
-// Disable ytdl-core update checks to prevent 403 errors
-process.env.YTDL_NO_UPDATE = '1';
 
 // Keep-alive server
 const app = express();
@@ -278,7 +274,7 @@ const registerCommands = async () => {
   }
 };
 
-// Enhanced music player function with fallback
+// Music player function
 async function playMusic(guild, song) {
   const queue = data.musicQueues.get(guild.id);
   if (!song) {
@@ -327,48 +323,25 @@ async function playMusic(guild, song) {
       playMusic(guild, queue.songs[0]);
     });
 
-    // Try ytdl-core first
-    try {
-      const stream = ytdl(song.url, {
-        filter: 'audioonly',
-        quality: 'highestaudio',
-        highWaterMark: 1 << 25,
-        dlChunkSize: 0,
-        requestOptions: {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36',
-            'Accept-Language': 'en-US,en;q=0.9',
-          }
+    // Create audio resource with better quality settings
+    const stream = ytdl(song.url, {
+      filter: 'audioonly',
+      quality: 'highestaudio',
+      highWaterMark: 1 << 25,
+      dlChunkSize: 0,
+      requestOptions: {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36'
         }
-      });
+      }
+    });
 
-      const resource = createAudioResource(stream, {
-        inlineVolume: true,
-      });
+    const resource = createAudioResource(stream, {
+      inlineVolume: true,
+    });
 
-      resource.volume.setVolume(queue.volume / 5);
-      queue.player.play(resource);
-    } catch (ytdlError) {
-      console.error('ytdl-core failed, falling back to youtube-dl-exec:', ytdlError);
-      
-      // Fallback to youtube-dl-exec
-      const stream = await youtubedl(song.url, {
-        output: '-',
-        quiet: true,
-        format: 'bestaudio',
-        limitRate: '1M',
-      }, {
-        stdio: ['ignore', 'pipe', 'ignore']
-      });
-      
-      const resource = createAudioResource(stream.stdout, {
-        inputType: 'opus',
-        inlineVolume: true
-      });
-      
-      resource.volume.setVolume(queue.volume / 5);
-      queue.player.play(resource);
-    }
+    resource.volume.setVolume(queue.volume / 5);
+    queue.player.play(resource);
     
     queue.textChannel.send({ 
       embeds: [createMusicEmbed('Now Playing', `🎵 Now playing **[${song.title}](${song.url})**`)
@@ -382,7 +355,7 @@ async function playMusic(guild, song) {
   } catch (error) {
     console.error('Play music error:', error);
     queue.textChannel.send({ 
-      embeds: [createErrorEmbed('Error', 'There was an error trying to play that song!')]
+      embeds: [createErrorEmbed('Error', 'There was an error trying to play the song!')]
     });
     queue.songs.shift();
     playMusic(guild, queue.songs[0]);
