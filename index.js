@@ -154,19 +154,22 @@ const registerCommands = async () => {
             name: 'category',
             description: 'Set ticket category',
             type: 7,
-            required: false
+            required: false,
+            channel_types: [ChannelType.GuildCategory]
           },
           {
             name: 'logchannel',
             description: 'Set ticket log channel',
             type: 7,
-            required: false
+            required: false,
+            channel_types: [ChannelType.GuildText]
           },
           {
             name: 'ratingchannel',
             description: 'Set ticket rating channel',
             type: 7,
-            required: false
+            required: false,
+            channel_types: [ChannelType.GuildText]
           }
         ]
       },
@@ -190,7 +193,8 @@ const registerCommands = async () => {
             name: 'setchannel',
             description: 'Set application log channel',
             type: 7,
-            required: false
+            required: false,
+            channel_types: [ChannelType.GuildText]
           }
         ]
       },
@@ -217,7 +221,12 @@ const registerCommands = async () => {
           name: 'choice',
           description: 'Your choice (rock/paper/scissors)',
           type: 3,
-          required: true
+          required: true,
+          choices: [
+            { name: 'Rock', value: 'rock' },
+            { name: 'Paper', value: 'paper' },
+            { name: 'Scissors', value: 'scissors' }
+          ]
         }]
       }
     ];
@@ -366,9 +375,9 @@ async function closeTicket(interaction, channel, setup, reason) {
   setTimeout(() => channel.delete().catch(() => {}), 5000);
 }
 
-client.once('ready', () => {
+client.once('ready', async () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
-  registerCommands();
+  await registerCommands();
 });
 
 // Slash command handler
@@ -416,7 +425,7 @@ client.on('interactionCreate', async interaction => {
 
     if (description) {
       setup.description = description;
-      await interaction.reply({ 
+      return interaction.reply({ 
         embeds: [createSuccessEmbed('Ticket Message Set', 'The ticket message has been updated successfully!')],
         ephemeral: true
       });
@@ -424,60 +433,51 @@ client.on('interactionCreate', async interaction => {
 
     if (viewerRole) {
       setup.viewerRoleId = viewerRole.id;
-      await interaction.reply({ 
+      return interaction.reply({ 
         embeds: [createSuccessEmbed('Viewer Role Set', `The ticket viewer role has been set to ${viewerRole}`)],
         ephemeral: true
       });
     }
 
     if (category) {
-      if (category.type !== ChannelType.GuildText) {
-        return interaction.reply({ 
-          embeds: [createErrorEmbed('Invalid Channel', 'Please select a text channel within the desired category.')],
-          ephemeral: true
-        });
-      }
-      setup.categoryId = category.parentId || category.id;
-      await interaction.reply({ 
-        embeds: [createSuccessEmbed('Category Set', `Ticket category has been set to ${category.parent ? category.parent.name : category.name}`)],
+      setup.categoryId = category.id;
+      return interaction.reply({ 
+        embeds: [createSuccessEmbed('Category Set', `Ticket category has been set to ${category.name}`)],
         ephemeral: true
       });
     }
 
     if (logChannel) {
-      if (logChannel.type !== ChannelType.GuildText) {
-        return interaction.reply({ 
-          embeds: [createErrorEmbed('Invalid Channel', 'Please select a text channel for logs.')],
-          ephemeral: true
-        });
-      }
       setup.logChannelId = logChannel.id;
-      await interaction.reply({ 
+      return interaction.reply({ 
         embeds: [createSuccessEmbed('Log Channel Set', `Ticket log channel set to ${logChannel}`)],
         ephemeral: true
       });
     }
 
     if (ratingChannel) {
-      if (ratingChannel.type !== ChannelType.GuildText) {
-        return interaction.reply({ 
-          embeds: [createErrorEmbed('Invalid Channel', 'Please select a text channel for ratings.')],
-          ephemeral: true
-        });
-      }
       setup.ratingChannelId = ratingChannel.id;
-      await interaction.reply({ 
+      return interaction.reply({ 
         embeds: [createSuccessEmbed('Rating Channel Set', `Ticket rating channel set to ${ratingChannel}`)],
         ephemeral: true
       });
     }
 
-    if (!description && !viewerRole && !category && !logChannel && !ratingChannel) {
-      await interaction.reply({ 
-        embeds: [createInfoEmbed('Ticket System', 'Configure the ticket system using the options below.')],
-        ephemeral: true
-      });
-    }
+    // If no options provided, show current settings
+    const embed = new EmbedBuilder()
+      .setTitle('🎟️ Current Ticket Settings')
+      .setColor('#EB459E')
+      .addFields(
+        { name: 'Description', value: setup.description || 'Not set', inline: true },
+        { name: 'Viewer Role', value: setup.viewerRoleId ? `<@&${setup.viewerRoleId}>` : 'Not set', inline: true },
+        { name: 'Category', value: setup.categoryId ? `<#${setup.categoryId}>` : 'Not set', inline: true },
+        { name: 'Log Channel', value: setup.logChannelId ? `<#${setup.logChannelId}>` : 'Not set', inline: true },
+        { name: 'Rating Channel', value: setup.ratingChannelId ? `<#${setup.ratingChannelId}>` : 'Not set', inline: true },
+        { name: 'Options', value: setup.options.length > 0 ? setup.options.map(o => `${o.emoji} ${o.label}`).join('\n') : 'No options set', inline: false }
+      )
+      .setFooter({ text: 'Use /ticket with options to configure' });
+
+    return interaction.reply({ embeds: [embed], ephemeral: true });
   }
 
   // Application system slash commands
@@ -496,7 +496,7 @@ client.on('interactionCreate', async interaction => {
 
     if (question) {
       app.questions.push(question);
-      await interaction.reply({ 
+      return interaction.reply({ 
         embeds: [createSuccessEmbed('Question Added', `Added question: ${question}`)],
         ephemeral: true
       });
@@ -530,7 +530,7 @@ client.on('interactionCreate', async interaction => {
         return `• ${name}: ${formatCooldown(cd)} cooldown`;
       });
       
-      await interaction.reply({ 
+      return interaction.reply({ 
         embeds: [createSuccessEmbed('Options Set', 
           `Application options updated successfully!\n\n${formattedOptions.join('\n')}`)],
         ephemeral: true
@@ -538,25 +538,26 @@ client.on('interactionCreate', async interaction => {
     }
 
     if (appChannel) {
-      if (appChannel.type !== ChannelType.GuildText) {
-        return interaction.reply({ 
-          embeds: [createErrorEmbed('Invalid Channel', 'Please select a text channel for applications.')],
-          ephemeral: true
-        });
-      }
       app.channelId = appChannel.id;
-      await interaction.reply({ 
+      return interaction.reply({ 
         embeds: [createSuccessEmbed('Channel Set', `Application log channel set to ${appChannel}`)],
         ephemeral: true
       });
     }
 
-    if (!question && !optionsStr && !appChannel) {
-      await interaction.reply({ 
-        embeds: [createInfoEmbed('Application System', 'Configure the application system using the options below.')],
-        ephemeral: true
-      });
-    }
+    // If no options provided, show current settings
+    const embed = new EmbedBuilder()
+      .setTitle('📝 Current Application Settings')
+      .setColor('#5865F2')
+      .addFields(
+        { name: 'Questions', value: app.questions.length > 0 ? app.questions.map((q, i) => `${i+1}. ${q}`).join('\n') : 'No questions set', inline: false },
+        { name: 'Options', value: Object.keys(app.options).length > 0 ? 
+          Object.entries(app.options).map(([name, cd]) => `• ${name}: ${formatCooldown(cd)}`).join('\n') : 'No options set', inline: false },
+        { name: 'Log Channel', value: app.channelId ? `<#${app.channelId}>` : 'Not set', inline: true }
+      )
+      .setFooter({ text: 'Use /application with options to configure' });
+
+    return interaction.reply({ embeds: [embed], ephemeral: true });
   }
 
   // Game commands
@@ -571,7 +572,7 @@ client.on('interactionCreate', async interaction => {
       answer: data.gameData.guessNumber 
     };
     
-    await interaction.reply({ 
+    return interaction.reply({ 
       embeds: [createGameEmbed('Guess the Number', 'I\'m thinking of a number between 1 and 100. Guess what it is!')]
     });
   }
@@ -584,7 +585,7 @@ client.on('interactionCreate', async interaction => {
     const q = data.gameData.triviaQuestions[Math.floor(Math.random() * data.gameData.triviaQuestions.length)];
     state.trivia = { active: true, answered: false, answer: q.answer };
     
-    await interaction.reply({ 
+    return interaction.reply({ 
       embeds: [createGameEmbed('Trivia Question', `❓ ${q.question}`)]
     });
   }
@@ -597,7 +598,7 @@ client.on('interactionCreate', async interaction => {
     const word = data.gameData.scrambleWords[Math.floor(Math.random() * data.gameData.scrambleWords.length)];
     state.scramble = { active: true, answered: false, answer: word };
     
-    await interaction.reply({ 
+    return interaction.reply({ 
       embeds: [createGameEmbed('Word Scramble', `🔤 Unscramble this word: **${scramble(word)}**`)]
     });
   }
@@ -605,13 +606,6 @@ client.on('interactionCreate', async interaction => {
   if (commandName === 'rps') {
     const choice = options.getString('choice').toLowerCase();
     const opts = ['rock', 'paper', 'scissors'];
-    
-    if (!opts.includes(choice)) {
-      return interaction.reply({ 
-        embeds: [createErrorEmbed('Invalid Choice', 'Please choose either rock, paper, or scissors.')],
-        ephemeral: true
-      });
-    }
     
     const botPick = opts[Math.floor(Math.random() * opts.length)];
     const result =
@@ -623,7 +617,7 @@ client.on('interactionCreate', async interaction => {
         ? 'You win!'
         : 'I win!';
         
-    await interaction.reply({ 
+    return interaction.reply({ 
       embeds: [createGameEmbed('Rock Paper Scissors', 
         `You chose **${choice}**, I chose **${botPick}** → ${result}`)]
     });
@@ -717,7 +711,7 @@ client.on('messageCreate', async message => {
     let successCount = 0;
     let failCount = 0;
 
-    const dmPromises = members.map(async member => {
+    for (const member of members.values()) {
       try {
         await member.send({
           embeds: [createInfoEmbed(`Message from ${guild.name}`, messageContent)]
@@ -727,9 +721,7 @@ client.on('messageCreate', async message => {
         console.error(`Failed to DM ${member.user.tag}:`, error);
         failCount++;
       }
-    });
-
-    await Promise.all(dmPromises);
+    }
 
     await confirmation.edit({ 
       embeds: [createSuccessEmbed('DM Complete', 
@@ -866,12 +858,6 @@ client.on('messageCreate', async message => {
     if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
       return message.reply({ 
         embeds: [createErrorEmbed('Permission Denied', 'You need administrator permissions to deploy ticket panel.')]
-      });
-    }
-
-    if (message.channel.type !== ChannelType.GuildText) {
-      return message.reply({
-        embeds: [createErrorEmbed('Invalid Channel', 'Ticket panel can only be deployed in text channels.')]
       });
     }
 
@@ -1046,17 +1032,30 @@ client.on('messageCreate', async message => {
 
     const embed = createApplicationEmbed('Application Menu', 'Click the button below to start an application!');
 
-    const row = new ActionRowBuilder();
-    for (const option in app.options) {
-      row.addComponents(
-        new ButtonBuilder()
-          .setCustomId(`app_${option}`)
-          .setLabel(`${option} (${formatCooldown(app.options[option])})`)
-          .setStyle(ButtonStyle.Primary)
-      );
+    const rows = [];
+    const options = Object.entries(app.options);
+    
+    // Split buttons into multiple rows if more than 5 options
+    for (let i = 0; i < options.length; i += 5) {
+      const row = new ActionRowBuilder();
+      const chunk = options.slice(i, i + 5);
+      
+      for (const [option, cooldown] of chunk) {
+        row.addComponents(
+          new ButtonBuilder()
+            .setCustomId(`app_${option}`)
+            .setLabel(option)
+            .setStyle(ButtonStyle.Primary)
+        );
+      }
+      
+      rows.push(row);
     }
 
-    await message.channel.send({ embeds: [embed], components: [row] });
+    await message.channel.send({ 
+      embeds: [embed], 
+      components: rows 
+    });
     return message.delete().catch(() => {});
   }
 
@@ -1279,10 +1278,8 @@ client.on('interactionCreate', async interaction => {
   }
 
   // Ticket button interactions
-  if (interaction.isButton()) {
+  if (interaction.isButton() && interaction.channel.name.startsWith('ticket-')) {
     const ch = interaction.channel;
-    if (!ch.name.startsWith('ticket-')) return;
-
     const setup = getGuildData(interaction.guild.id, 'tickets');
     const isStaff = interaction.member.roles.cache.has(setup.viewerRoleId) || 
                     interaction.member.permissions.has(PermissionsBitField.Flags.ManageChannels);
@@ -1423,7 +1420,7 @@ client.on('interactionCreate', async interaction => {
       });
     }
 
-    if (app.cooldowns.has(option) ){
+    if (app.cooldowns.has(option)) {
       const userCooldown = app.cooldowns.get(option).get(userId);
       if (userCooldown && userCooldown > Date.now()) {
         const remaining = Math.ceil((userCooldown - Date.now()) / (1000 * 60 * 60 * 24));
@@ -1480,6 +1477,15 @@ client.on('interactionCreate', async interaction => {
           });
           
           const response = collected.first();
+          if (!response) {
+            await dmChannel.send({ 
+              embeds: [createErrorEmbed('Timed Out', 'Application timed out due to inactivity.')]
+            });
+            userState.applicationActive = false;
+            data.userStates.set(userId, userState);
+            return;
+          }
+          
           if (response.content.toLowerCase() === 'cancel') {
             await dmChannel.send({ 
               embeds: [createErrorEmbed('Application Cancelled', 'Your application has been cancelled.')]
@@ -1490,9 +1496,10 @@ client.on('interactionCreate', async interaction => {
           }
           
           responses.push(response.content);
-        } catch {
+        } catch (error) {
+          console.error('Error collecting application response:', error);
           await dmChannel.send({ 
-            embeds: [createErrorEmbed('Timed Out', 'Application timed out due to inactivity.')]
+            embeds: [createErrorEmbed('Error', 'An error occurred while processing your application.')]
           });
           userState.applicationActive = false;
           data.userStates.set(userId, userState);
@@ -1556,7 +1563,7 @@ client.on('interactionCreate', async interaction => {
         embeds: [createSuccessEmbed('Application Submitted', 'Your application has been submitted successfully!')]
       });
     } catch (error) {
-      console.error(error);
+      console.error('Error in application process:', error);
       await interaction.followUp({
         embeds: [createErrorEmbed('DM Failed', 'I couldn\'t DM you. Please enable DMs from server members.')],
         ephemeral: true
@@ -1606,7 +1613,7 @@ client.on('interactionCreate', async interaction => {
             components: []
           });
         } catch (error) {
-          console.error(error);
+          console.error('Error accepting application:', error);
           await interaction.reply({
             embeds: [createErrorEmbed('Error', 'Could not DM the user about the acceptance.')],
             ephemeral: true
@@ -1763,7 +1770,7 @@ client.on('interactionCreate', async interaction => {
         components: []
       });
     } catch (error) {
-      console.error(error);
+      console.error('Error rejecting application:', error);
       await interaction.reply({
         embeds: [createErrorEmbed('Error', 'Could not DM the user about the rejection.')],
         ephemeral: true
@@ -1789,7 +1796,7 @@ client.on('interactionCreate', async interaction => {
   // Rating system interaction
   if (interaction.isButton() && interaction.customId.startsWith('rate_')) {
     const rating = parseInt(interaction.customId.split('_')[1]);
-    if (isNaN(rating)) return;
+    if (isNaN(rating) return;
 
     try {
       await interaction.reply({
