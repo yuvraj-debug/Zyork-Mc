@@ -26,7 +26,7 @@ const client = new Client({
     GatewayIntentBits.DirectMessages,
     GatewayIntentBits.GuildVoiceStates
   ],
-  partials: [Partials.Channel]
+  partials: [Partials.Channel, Partials.Message, Partials.Reaction]
 });
 
 // Data storage
@@ -123,135 +123,143 @@ const createApplicationEmbed = (title, description) => new EmbedBuilder()
 
 // Ticket closing function
 async function closeTicket(interaction, channel, setup, reason) {
-  const msgs = await channel.messages.fetch({ limit: 100 });
-  const transcript = [...msgs.values()]
-    .reverse()
-    .map(m => `${m.author.tag} [${m.createdAt.toLocaleString()}]: ${m.content}`)
-    .join('\n');
+  try {
+    const msgs = await channel.messages.fetch({ limit: 100 });
+    const transcript = [...msgs.values()]
+      .reverse()
+      .map(m => `${m.author.tag} [${m.createdAt.toLocaleString()}]: ${m.content}`)
+      .join('\n');
 
-  const file = new AttachmentBuilder(Buffer.from(transcript), { name: 'transcript.txt' });
+    const file = new AttachmentBuilder(Buffer.from(transcript), { name: 'transcript.txt' });
 
-  // Find ticket owner and claimer
-  const uname = channel.name.split('-')[1];
-  const member = interaction.guild.members.cache.find(m => 
-    m.user.username.toLowerCase().startsWith(uname)
-  );
-  
-  // Check if ticket was claimed
-  let claimedBy = null;
-  const ticketButtons = channel.messages.cache.find(m => m.components.length > 0);
-  if (ticketButtons) {
-    const claimButton = ticketButtons.components[0].components.find(c => c.customId === 'ticket_claim');
-    if (claimButton && claimButton.disabled) {
-      claimedBy = ticketButtons.mentions.users.first();
+    // Find ticket owner and claimer
+    const uname = channel.name.split('-')[1];
+    const member = interaction.guild.members.cache.find(m => 
+      m.user.username.toLowerCase().startsWith(uname)
+    );
+    
+    // Check if ticket was claimed
+    let claimedBy = null;
+    const ticketButtons = channel.messages.cache.find(m => m.components.length > 0);
+    if (ticketButtons) {
+      const claimButton = ticketButtons.components[0].components.find(c => c.customId === 'ticket_claim');
+      if (claimButton && claimButton.disabled) {
+        claimedBy = ticketButtons.mentions.users.first();
+      }
     }
-  }
 
-  // Create transcript embed
-  const transcriptEmbed = new EmbedBuilder()
-    .setColor('#EB459E')
-    .setTitle('🎟️ Ticket Transcript')
-    .setDescription(`**Ticket:** ${channel.name}\n**Closed by:** ${interaction.user.tag}\n**Reason:** ${reason}`)
-    .setFooter({ text: `Closed at ${new Date().toLocaleString()}` });
+    // Create transcript embed
+    const transcriptEmbed = new EmbedBuilder()
+      .setColor('#EB459E')
+      .setTitle('🎟️ Ticket Transcript')
+      .setDescription(`**Ticket:** ${channel.name}\n**Closed by:** ${interaction.user.tag}\n**Reason:** ${reason || 'No reason provided'}`)
+      .setFooter({ text: `Closed at ${new Date().toLocaleString()}` });
 
-  // Send to log channel if set
-  if (setup.logChannelId) {
-    const logChannel = await client.channels.fetch(setup.logChannelId);
-    if (logChannel) {
-      await logChannel.send({ 
-        embeds: [transcriptEmbed],
-        files: [file] 
-      });
-    }
-  }
-
-  // Enhanced DM to ticket owner
-  if (member) {
-    try {
-      const ticketCategory = channel.name.split('-')[2] || 'General Support';
-      
-      const dmEmbed = new EmbedBuilder()
-        .setColor('#EB459E')
-        .setTitle(`🎟️ Your Ticket in ${interaction.guild.name} has been closed`)
-        .setDescription([
-          `**Ticket Channel:** ${channel.name}`,
-          `**Closed by:** ${interaction.user}`,
-          `**Reason:** ${reason}`,
-          '',
-          'We value your feedback and would appreciate your rating of our support.',
-          'Please take a moment to share your satisfaction level by choosing a rating between 1-5 stars below. Your input is valuable to us!'
-        ].join('\n'))
-        .setThumbnail(interaction.guild.iconURL())
-        .addFields(
-          {
-            name: '• Ticket Information',
-            value: [
-              `**Category:** ${ticketCategory}`,
-              `**Claimed by:** ${claimedBy ? claimedBy.tag : 'Not claimed'}`,
-              `**Total Messages:** ${msgs.size}`
-            ].join('\n'),
-            inline: false
-          }
-        )
-        .setFooter({ 
-          text: `Ticket closed at ${new Date().toLocaleString()}`, 
-          iconURL: interaction.user.displayAvatarURL() 
+    // Send to log channel if set
+    if (setup.logChannelId) {
+      const logChannel = await client.channels.fetch(setup.logChannelId).catch(() => null);
+      if (logChannel) {
+        await logChannel.send({ 
+          embeds: [transcriptEmbed],
+          files: [file] 
         });
-
-      // Create rating buttons
-      const ratingButtons = new ActionRowBuilder()
-        .addComponents(
-          new ButtonBuilder()
-            .setCustomId('rate_1')
-            .setLabel('⭐')
-            .setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder()
-            .setCustomId('rate_2')
-            .setLabel('⭐⭐')
-            .setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder()
-            .setCustomId('rate_3')
-            .setLabel('⭐⭐⭐')
-            .setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder()
-            .setCustomId('rate_4')
-            .setLabel('⭐⭐⭐⭐')
-            .setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder()
-            .setCustomId('rate_5')
-            .setLabel('⭐⭐⭐⭐⭐')
-            .setStyle(ButtonStyle.Secondary)
-        );
-
-      await member.send({ 
-        content: '📩 Here\'s the transcript of your closed ticket:',
-        embeds: [dmEmbed, transcriptEmbed],
-        files: [file],
-        components: [ratingButtons]
-      });
-    } catch (error) {
-      console.error(`Failed to DM ${member.user.tag}:`, error);
-      await channel.send(`Couldn't DM transcript to ${member.user.tag} (DMs disabled?)`);
+      }
     }
+
+    // Enhanced DM to ticket owner
+    if (member) {
+      try {
+        const ticketCategory = channel.name.split('-')[2] || 'General Support';
+        
+        const dmEmbed = new EmbedBuilder()
+          .setColor('#EB459E')
+          .setTitle(`🎟️ Your Ticket in ${interaction.guild.name} has been closed`)
+          .setDescription([
+            `**Ticket Channel:** ${channel.name}`,
+            `**Closed by:** ${interaction.user}`,
+            `**Reason:** ${reason || 'No reason provided'}`,
+            '',
+            'We value your feedback and would appreciate your rating of our support.',
+            'Please take a moment to share your satisfaction level by choosing a rating between 1-5 stars below. Your input is valuable to us!'
+          ].join('\n'))
+          .setThumbnail(interaction.guild.iconURL())
+          .addFields(
+            {
+              name: '• Ticket Information',
+              value: [
+                `**Category:** ${ticketCategory}`,
+                `**Claimed by:** ${claimedBy ? claimedBy.tag : 'Not claimed'}`,
+                `**Total Messages:** ${msgs.size}`
+              ].join('\n'),
+              inline: false
+            }
+          )
+          .setFooter({ 
+            text: `Ticket closed at ${new Date().toLocaleString()}`, 
+            iconURL: interaction.user.displayAvatarURL() 
+          });
+
+        // Create rating buttons
+        const ratingButtons = new ActionRowBuilder()
+          .addComponents(
+            new ButtonBuilder()
+              .setCustomId('rate_1')
+              .setLabel('⭐')
+              .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+              .setCustomId('rate_2')
+              .setLabel('⭐⭐')
+              .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+              .setCustomId('rate_3')
+              .setLabel('⭐⭐⭐')
+              .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+              .setCustomId('rate_4')
+              .setLabel('⭐⭐⭐⭐')
+              .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+              .setCustomId('rate_5')
+              .setLabel('⭐⭐⭐⭐⭐')
+              .setStyle(ButtonStyle.Secondary)
+          );
+
+        await member.send({ 
+          content: '📩 Here\'s the transcript of your closed ticket:',
+          embeds: [dmEmbed, transcriptEmbed],
+          files: [file],
+          components: [ratingButtons]
+        });
+      } catch (error) {
+        console.error(`Failed to DM ${member.user.tag}:`, error);
+        await channel.send(`Couldn't DM transcript to ${member.user.tag} (DMs disabled?)`);
+      }
+    }
+
+    // Send final message and delete channel
+    await channel.send({ 
+      embeds: [
+        new EmbedBuilder()
+          .setColor('#EB459E')
+          .setTitle('🎟️ Ticket Closed')
+          .setDescription([
+            `This ticket has been closed by ${interaction.user}`,
+            `**Reason:** ${reason || 'No reason provided'}`,
+            '',
+            'The channel will be deleted shortly.'
+          ].join('\n'))
+          .setFooter({ text: 'Thank you for using our ticket system!' })
+      ] 
+    });
+
+    setTimeout(() => channel.delete().catch(() => {}), 5000);
+  } catch (error) {
+    console.error('Error closing ticket:', error);
+    await interaction.followUp({
+      embeds: [createErrorEmbed('Error', 'An error occurred while closing the ticket.')],
+      ephemeral: true
+    });
   }
-
-  // Send final message and delete channel
-  await channel.send({ 
-    embeds: [
-      new EmbedBuilder()
-        .setColor('#EB459E')
-        .setTitle('🎟️ Ticket Closed')
-        .setDescription([
-          `This ticket has been closed by ${interaction.user}`,
-          `**Reason:** ${reason}`,
-          '',
-          'The channel will be deleted shortly.'
-        ].join('\n'))
-        .setFooter({ text: 'Thank you for using our ticket system!' })
-    ] 
-  });
-
-  setTimeout(() => channel.delete().catch(() => {}), 5000);
 }
 
 client.once('ready', () => {
@@ -330,37 +338,46 @@ client.on('messageCreate', async message => {
       });
     }
 
-    const members = (await guild.members.fetch()).filter(m => m.roles.cache.has(role.id));
+    try {
+      const members = await guild.members.fetch();
+      const membersWithRole = members.filter(m => m.roles.cache.has(role.id));
 
-    if (members.size === 0) {
-      return message.reply({ 
-        embeds: [createErrorEmbed('No Members', 'No members have this role.')]
+      if (membersWithRole.size === 0) {
+        return message.reply({ 
+          embeds: [createErrorEmbed('No Members', 'No members have this role.')]
+        });
+      }
+
+      const confirmation = await message.reply({ 
+        embeds: [createInfoEmbed('Processing', `Sending DM to ${membersWithRole.size} members...`)]
+      });
+
+      let successCount = 0;
+      let failCount = 0;
+
+      for (const member of membersWithRole.values()) {
+        try {
+          await member.send({
+            embeds: [createInfoEmbed(`Message from ${guild.name}`, messageContent)]
+          });
+          successCount++;
+        } catch (error) {
+          console.error(`Failed to DM ${member.user.tag}:`, error);
+          failCount++;
+        }
+      }
+
+      await confirmation.edit({ 
+        embeds: [createSuccessEmbed('DM Complete', 
+          `Successfully sent to ${successCount} members. Failed to send to ${failCount} members.`)]
+      });
+    } catch (error) {
+      console.error('Error in DM command:', error);
+      await message.reply({
+        embeds: [createErrorEmbed('Error', 'An error occurred while processing your request.')]
       });
     }
-
-    const confirmation = await message.reply({ 
-      embeds: [createInfoEmbed('Processing', `Sending DM to ${members.size} members...`)]
-    });
-
-    let successCount = 0;
-    let failCount = 0;
-
-    for (const member of members.values()) {
-      try {
-        await member.send({
-          embeds: [createInfoEmbed(`Message from ${guild.name}`, messageContent)]
-        });
-        successCount++;
-      } catch (error) {
-        console.error(`Failed to DM ${member.user.tag}:`, error);
-        failCount++;
-      }
-    }
-
-    await confirmation.edit({ 
-      embeds: [createSuccessEmbed('DM Complete', 
-        `Successfully sent to ${successCount} members. Failed to send to ${failCount} members.`)]
-    });
+    return;
   }
 
   // === MSG COMMAND ===
@@ -387,7 +404,7 @@ client.on('messageCreate', async message => {
       
       const embed = new EmbedBuilder()
         .setDescription(msgContent)
-        .setColor('#5865F2') // Blurple color
+        .setColor('#5865F2')
         .setTimestamp();
 
       await channel.send({ embeds: [embed] });
@@ -861,74 +878,82 @@ client.on('interactionCreate', async interaction => {
     }
 
     const name = `ticket-${user.username.toLowerCase().replace(/\s+/g, '-')}-${Date.now().toString().slice(-4)}`;
-    const ch = await interaction.guild.channels.create({
-      name,
-      type: ChannelType.GuildText,
-      parent: setup.categoryId,
-      permissionOverwrites: [
-        { 
-          id: interaction.guild.roles.everyone, 
-          deny: [PermissionsBitField.Flags.ViewChannel] 
+    try {
+      const ch = await interaction.guild.channels.create({
+        name,
+        type: ChannelType.GuildText,
+        parent: setup.categoryId,
+        permissionOverwrites: [
+          { 
+            id: interaction.guild.roles.everyone, 
+            deny: [PermissionsBitField.Flags.ViewChannel] 
+          },
+          { 
+            id: user.id, 
+            allow: [
+              PermissionsBitField.Flags.ViewChannel, 
+              PermissionsBitField.Flags.SendMessages, 
+              PermissionsBitField.Flags.ReadMessageHistory
+            ] 
+          },
+          { 
+            id: setup.viewerRoleId, 
+            allow: [
+              PermissionsBitField.Flags.ViewChannel, 
+              PermissionsBitField.Flags.SendMessages, 
+              PermissionsBitField.Flags.ReadMessageHistory,
+              PermissionsBitField.Flags.ManageMessages
+            ] 
+          }
+        ]
+      });
+
+      const ticketEmbed = new EmbedBuilder()
+        .setColor('#EB459E')
+        .setTitle(`🎟️ ${opt.label} Ticket`)
+        .setDescription(`**Ticket created by:** ${user}\n**Category:** ${opt.label}\n\nPlease be patient while we assist you.`)
+        .setFooter({ text: 'Ticket will be closed if inactive for too long' })
+        .setTimestamp();
+
+      const ticketButtons = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('ticket_claim')
+          .setLabel('Claim Ticket')
+          .setStyle(ButtonStyle.Primary)
+          .setEmoji('🙋'),
+        new ButtonBuilder()
+          .setCustomId('ticket_close')
+          .setLabel('Close')
+          .setStyle(ButtonStyle.Danger)
+          .setEmoji('🔒'),
+        new ButtonBuilder()
+          .setCustomId('ticket_close_reason')
+          .setLabel('Close with Reason')
+          .setStyle(ButtonStyle.Secondary)
+          .setEmoji('📝')
+      );
+
+      await ch.send({ 
+        content: `🎫 <@${user.id}> opened **${opt.label}** ticket. <@&${setup.viewerRoleId}>`, 
+        allowedMentions: { 
+          users: [user.id], 
+          roles: [setup.viewerRoleId] 
         },
-        { 
-          id: user.id, 
-          allow: [
-            PermissionsBitField.Flags.ViewChannel, 
-            PermissionsBitField.Flags.SendMessages, 
-            PermissionsBitField.Flags.ReadMessageHistory
-          ] 
-        },
-        { 
-          id: setup.viewerRoleId, 
-          allow: [
-            PermissionsBitField.Flags.ViewChannel, 
-            PermissionsBitField.Flags.SendMessages, 
-            PermissionsBitField.Flags.ReadMessageHistory,
-            PermissionsBitField.Flags.ManageMessages
-          ] 
-        }
-      ]
-    });
+        embeds: [ticketEmbed],
+        components: [ticketButtons]
+      });
 
-    const ticketEmbed = new EmbedBuilder()
-      .setColor('#EB459E')
-      .setTitle(`🎟️ ${opt.label} Ticket`)
-      .setDescription(`**Ticket created by:** ${user}\n**Category:** ${opt.label}\n\nPlease be patient while we assist you.`)
-      .setFooter({ text: 'Ticket will be closed if inactive for too long' })
-      .setTimestamp();
-
-    const ticketButtons = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId('ticket_claim')
-        .setLabel('Claim Ticket')
-        .setStyle(ButtonStyle.Primary)
-        .setEmoji('🙋'),
-      new ButtonBuilder()
-        .setCustomId('ticket_close')
-        .setLabel('Close')
-        .setStyle(ButtonStyle.Danger)
-        .setEmoji('🔒'),
-      new ButtonBuilder()
-        .setCustomId('ticket_close_reason')
-        .setLabel('Close with Reason')
-        .setStyle(ButtonStyle.Secondary)
-        .setEmoji('📝')
-    );
-
-    await ch.send({ 
-      content: `🎫 <@${user.id}> opened **${opt.label}** ticket. <@&${setup.viewerRoleId}>`, 
-      allowedMentions: { 
-        users: [user.id], 
-        roles: [setup.viewerRoleId] 
-      },
-      embeds: [ticketEmbed],
-      components: [ticketButtons]
-    });
-
-    return interaction.reply({ 
-      embeds: [createSuccessEmbed('Ticket Created', `Your ticket has been created: <#${ch.id}>`)],
-      ephemeral: true 
-    });
+      return interaction.reply({ 
+        embeds: [createSuccessEmbed('Ticket Created', `Your ticket has been created: <#${ch.id}>`)],
+        ephemeral: true 
+      });
+    } catch (error) {
+      console.error('Error creating ticket channel:', error);
+      return interaction.reply({
+        embeds: [createErrorEmbed('Error', 'Failed to create ticket channel.')],
+        ephemeral: true
+      });
+    }
   }
 
   // Ticket button interactions
@@ -948,55 +973,63 @@ client.on('interactionCreate', async interaction => {
           });
         }
 
-        await ch.permissionOverwrites.set([
-          {
-            id: interaction.guild.roles.everyone,
-            deny: [PermissionsBitField.Flags.ViewChannel]
-          },
-          {
-            id: interaction.user.id,
-            allow: [
-              PermissionsBitField.Flags.ViewChannel,
-              PermissionsBitField.Flags.SendMessages,
-              PermissionsBitField.Flags.ReadMessageHistory,
-              PermissionsBitField.Flags.ManageMessages
-            ]
-          },
-          ...ch.permissionOverwrites.cache
-            .filter(overwrite => overwrite.type === 1 && overwrite.id !== interaction.user.id)
-            .map(overwrite => ({
-              id: overwrite.id,
+        try {
+          await ch.permissionOverwrites.set([
+            {
+              id: interaction.guild.roles.everyone,
               deny: [PermissionsBitField.Flags.ViewChannel]
-            }))
-        ]);
+            },
+            {
+              id: interaction.user.id,
+              allow: [
+                PermissionsBitField.Flags.ViewChannel,
+                PermissionsBitField.Flags.SendMessages,
+                PermissionsBitField.Flags.ReadMessageHistory,
+                PermissionsBitField.Flags.ManageMessages
+              ]
+            },
+            ...ch.permissionOverwrites.cache
+              .filter(overwrite => overwrite.type === 1 && overwrite.id !== interaction.user.id)
+              .map(overwrite => ({
+                id: overwrite.id,
+                deny: [PermissionsBitField.Flags.ViewChannel]
+              }))
+          ]);
 
-        await interaction.reply({ 
-          embeds: [createSuccessEmbed('Ticket Claimed', `${interaction.user} has claimed this ticket!`)],
-          allowedMentions: { users: [interaction.user.id] }
-        });
+          await interaction.reply({ 
+            embeds: [createSuccessEmbed('Ticket Claimed', `${interaction.user} has claimed this ticket!`)],
+            allowedMentions: { users: [interaction.user.id] }
+          });
 
-        const newButtons = new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId('ticket_claim')
-            .setLabel('Claimed')
-            .setStyle(ButtonStyle.Success)
-            .setEmoji('✅')
-            .setDisabled(true),
-          new ButtonBuilder()
-            .setCustomId('ticket_close')
-            .setLabel('Close')
-            .setStyle(ButtonStyle.Danger)
-            .setEmoji('🔒'),
-          new ButtonBuilder()
-            .setCustomId('ticket_close_reason')
-            .setLabel('Close with Reason')
-            .setStyle(ButtonStyle.Secondary)
-            .setEmoji('📝')
-        );
+          const newButtons = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId('ticket_claim')
+              .setLabel('Claimed')
+              .setStyle(ButtonStyle.Success)
+              .setEmoji('✅')
+              .setDisabled(true),
+            new ButtonBuilder()
+              .setCustomId('ticket_close')
+              .setLabel('Close')
+              .setStyle(ButtonStyle.Danger)
+              .setEmoji('🔒'),
+            new ButtonBuilder()
+              .setCustomId('ticket_close_reason')
+              .setLabel('Close with Reason')
+              .setStyle(ButtonStyle.Secondary)
+              .setEmoji('📝')
+          );
 
-        const msg = await ch.messages.fetch({ limit: 1 }).then(messages => messages.first());
-        if (msg) {
-          await msg.edit({ components: [newButtons] });
+          const msg = await ch.messages.fetch({ limit: 1 }).then(messages => messages.first());
+          if (msg) {
+            await msg.edit({ components: [newButtons] });
+          }
+        } catch (error) {
+          console.error('Error claiming ticket:', error);
+          await interaction.reply({
+            embeds: [createErrorEmbed('Error', 'Failed to claim ticket.')],
+            ephemeral: true
+          });
         }
         break;
       }
@@ -1009,10 +1042,7 @@ client.on('interactionCreate', async interaction => {
           });
         }
 
-        await interaction.reply({ 
-          embeds: [createInfoEmbed('Processing', 'Generating transcript and closing ticket...')] 
-        });
-
+        await interaction.deferReply();
         await closeTicket(interaction, ch, setup, 'No reason provided');
         break;
       }
@@ -1051,10 +1081,7 @@ client.on('interactionCreate', async interaction => {
     const ch = interaction.channel;
     const setup = getGuildData(interaction.guild.id, 'tickets');
 
-    await interaction.reply({ 
-      embeds: [createInfoEmbed('Processing', 'Generating transcript and closing ticket...')] 
-    });
-
+    await interaction.deferReply();
     await closeTicket(interaction, ch, setup, reason);
   }
 
@@ -1173,7 +1200,7 @@ client.on('interactionCreate', async interaction => {
       }
 
       if (app.channelId) {
-        const logChannel = await client.channels.fetch(app.channelId);
+        const logChannel = await client.channels.fetch(app.channelId).catch(() => null);
         if (logChannel) {
           const embed = createApplicationEmbed(`New Application: ${option}`, 
             `From ${interaction.user} (${interaction.user.tag})`)
@@ -1257,7 +1284,7 @@ client.on('interactionCreate', async interaction => {
             ephemeral: true
           });
 
-          const newEmbed = interaction.message.embeds[0]
+          const newEmbed = EmbedBuilder.from(interaction.message.embeds[0])
             .setColor('#57F287')
             .setTitle(`✅ Accepted: ${interaction.message.embeds[0].title}`)
             .setFooter({ text: `Accepted by ${interaction.user.tag}` });
@@ -1305,80 +1332,88 @@ client.on('interactionCreate', async interaction => {
         }
 
         const name = `app-${member.user.username.toLowerCase().replace(/\s+/g, '-')}-${Date.now().toString().slice(-4)}`;
-        const ch = await interaction.guild.channels.create({
-          name,
-          type: ChannelType.GuildText,
-          parent: setup.categoryId,
-          permissionOverwrites: [
-            { 
-              id: interaction.guild.roles.everyone, 
-              deny: [PermissionsBitField.Flags.ViewChannel] 
-            },
-            { 
-              id: member.id, 
-              allow: [
-                PermissionsBitField.Flags.ViewChannel, 
-                PermissionsBitField.Flags.SendMessages, 
-                PermissionsBitField.Flags.ReadMessageHistory
-              ] 
-            },
-            { 
-              id: interaction.user.id, 
-              allow: [
-                PermissionsBitField.Flags.ViewChannel, 
-                PermissionsBitField.Flags.SendMessages, 
-                PermissionsBitField.Flags.ReadMessageHistory,
-                PermissionsBitField.Flags.ManageMessages
-              ] 
-            }
-          ]
-        });
+        try {
+          const ch = await interaction.guild.channels.create({
+            name,
+            type: ChannelType.GuildText,
+            parent: setup.categoryId,
+            permissionOverwrites: [
+              { 
+                id: interaction.guild.roles.everyone, 
+                deny: [PermissionsBitField.Flags.ViewChannel] 
+              },
+              { 
+                id: member.id, 
+                allow: [
+                  PermissionsBitField.Flags.ViewChannel, 
+                  PermissionsBitField.Flags.SendMessages, 
+                  PermissionsBitField.Flags.ReadMessageHistory
+                ] 
+              },
+              { 
+                id: interaction.user.id, 
+                allow: [
+                  PermissionsBitField.Flags.ViewChannel, 
+                  PermissionsBitField.Flags.SendMessages, 
+                  PermissionsBitField.Flags.ReadMessageHistory,
+                  PermissionsBitField.Flags.ManageMessages
+                ] 
+              }
+            ]
+          });
 
-        const ticketEmbed = new EmbedBuilder()
-          .setColor('#EB459E')
-          .setTitle(`🎟️ Application Follow-up: ${option}`)
-          .setDescription(`**Ticket created for:** ${member}\n**Application type:** ${option}\n\nThis ticket was opened to discuss your application further.`)
-          .setFooter({ text: 'Ticket will be closed if inactive for too long' })
-          .setTimestamp();
+          const ticketEmbed = new EmbedBuilder()
+            .setColor('#EB459E')
+            .setTitle(`🎟️ Application Follow-up: ${option}`)
+            .setDescription(`**Ticket created for:** ${member}\n**Application type:** ${option}\n\nThis ticket was opened to discuss your application further.`)
+            .setFooter({ text: 'Ticket will be closed if inactive for too long' })
+            .setTimestamp();
 
-        const ticketButtons = new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId('ticket_claim')
-            .setLabel('Claim Ticket')
-            .setStyle(ButtonStyle.Primary)
-            .setEmoji('🙋'),
-          new ButtonBuilder()
-            .setCustomId('ticket_close')
-            .setLabel('Close')
-            .setStyle(ButtonStyle.Danger)
-            .setEmoji('🔒'),
-          new ButtonBuilder()
-            .setCustomId('ticket_close_reason')
-            .setLabel('Close with Reason')
-            .setStyle(ButtonStyle.Secondary)
-            .setEmoji('📝')
-        );
+          const ticketButtons = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId('ticket_claim')
+              .setLabel('Claim Ticket')
+              .setStyle(ButtonStyle.Primary)
+              .setEmoji('🙋'),
+            new ButtonBuilder()
+              .setCustomId('ticket_close')
+              .setLabel('Close')
+              .setStyle(ButtonStyle.Danger)
+              .setEmoji('🔒'),
+            new ButtonBuilder()
+              .setCustomId('ticket_close_reason')
+              .setLabel('Close with Reason')
+              .setStyle(ButtonStyle.Secondary)
+              .setEmoji('📝')
+          );
 
-        await ch.send({ 
-          content: `🎫 Application follow-up for ${member} (${option})`, 
-          embeds: [ticketEmbed],
-          components: [ticketButtons]
-        });
+          await ch.send({ 
+            content: `🎫 Application follow-up for ${member} (${option})`, 
+            embeds: [ticketEmbed],
+            components: [ticketButtons]
+          });
 
-        await interaction.reply({
-          embeds: [createSuccessEmbed('Ticket Created', `Created follow-up ticket: <#${ch.id}>`)],
-          ephemeral: true
-        });
+          await interaction.reply({
+            embeds: [createSuccessEmbed('Ticket Created', `Created follow-up ticket: <#${ch.id}>`)],
+            ephemeral: true
+          });
 
-        const newEmbed = interaction.message.embeds[0]
-          .setColor('#FEE75C')
-          .setTitle(`🎟️ Ticket Opened: ${interaction.message.embeds[0].title}`)
-          .setFooter({ text: `Ticket opened by ${interaction.user.tag}` });
+          const newEmbed = EmbedBuilder.from(interaction.message.embeds[0])
+            .setColor('#FEE75C')
+            .setTitle(`🎟️ Ticket Opened: ${interaction.message.embeds[0].title}`)
+            .setFooter({ text: `Ticket opened by ${interaction.user.tag}` });
 
-        await interaction.message.edit({
-          embeds: [newEmbed],
-          components: []
-        });
+          await interaction.message.edit({
+            embeds: [newEmbed],
+            components: []
+          });
+        } catch (error) {
+          console.error('Error creating application ticket:', error);
+          await interaction.reply({
+            embeds: [createErrorEmbed('Error', 'Failed to create follow-up ticket.')],
+            ephemeral: true
+          });
+        }
         break;
       }
     }
@@ -1414,7 +1449,7 @@ client.on('interactionCreate', async interaction => {
         ephemeral: true
       });
 
-      const newEmbed = interaction.message.embeds[0]
+      const newEmbed = EmbedBuilder.from(interaction.message.embeds[0])
         .setColor('#ED4245')
         .setTitle(`❌ Rejected: ${interaction.message.embeds[0].title}`)
         .setFooter({ text: `Rejected by ${interaction.user.tag}` });
@@ -1460,7 +1495,7 @@ client.on('interactionCreate', async interaction => {
 
       const setup = getGuildData(interaction.guild.id, 'tickets');
       if (setup.ratingChannelId) {
-        const ratingChannel = await client.channels.fetch(setup.ratingChannelId);
+        const ratingChannel = await client.channels.fetch(setup.ratingChannelId).catch(() => null);
         if (ratingChannel) {
           await ratingChannel.send({
             embeds: [createInfoEmbed('Ticket Rating', 
