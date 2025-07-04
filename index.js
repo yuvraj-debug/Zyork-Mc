@@ -1,4 +1,17 @@
 require('dotenv').config();
+const express = require('express');
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Dummy endpoint to keep service alive
+app.get('/', (req, res) => {
+  res.send('✅ Bot is alive and running!');
+});
+
+app.listen(PORT, () => {
+  console.log(`✅ Web server listening on port ${PORT}`);
+});
+
 const {
   Client,
   GatewayIntentBits,
