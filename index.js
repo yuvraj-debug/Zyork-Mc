@@ -228,6 +228,16 @@ const registerCommands = async () => {
             { name: 'Scissors', value: 'scissors' }
           ]
         }]
+      },
+      {
+        name: 'embed',
+        description: 'Send a message as an embed',
+        options: [{
+          name: 'message',
+          description: 'The message to embed',
+          type: 3,
+          required: true
+        }]
       }
     ];
 
@@ -396,7 +406,8 @@ client.on('interactionCreate', async interaction => {
       .addFields(
         { name: '🎟️ Ticket System', value: '`/ticket` - Configure ticket system\n`/ticket description` - Set panel description\n`/ticket viewerrole` - Set viewer role\n`/ticket category` - Set ticket category\n`/ticket logchannel` - Set log channel\n`/ticket ratingchannel` - Set rating channel', inline: false },
         { name: '📝 Applications', value: '`/application` - Configure applications\n`/application addquestion` - Add question\n`/application setoptions` - Set options\n`/application setchannel` - Set log channel', inline: false },
-        { name: '🎮 Games', value: '`/guess` - Number guessing game\n`/trivia` - Trivia questions\n`/scramble` - Word scramble\n`/rps` - Rock paper scissors', inline: false }
+        { name: '🎮 Games', value: '`/guess` - Number guessing game\n`/trivia` - Trivia questions\n`/scramble` - Word scramble\n`/rps` - Rock paper scissors', inline: false },
+        { name: '📊 Utilities', value: '`/embed` - Send a message as an embed', inline: false }
       )
       .setFooter({ 
         text: 'Use the slash commands for most functionality', 
@@ -622,6 +633,32 @@ client.on('interactionCreate', async interaction => {
         `You chose **${choice}**, I chose **${botPick}** → ${result}`)]
     });
   }
+
+  // Embed command
+  if (commandName === 'embed') {
+    const message = options.getString('message');
+    if (!message) {
+      return interaction.reply({
+        embeds: [createErrorEmbed('Error', 'Please provide a message to embed.')],
+        ephemeral: true
+      });
+    }
+
+    const embed = new EmbedBuilder()
+      .setDescription(message)
+      .setColor('#5865F2') // Blurple color
+      .setTimestamp();
+
+    try {
+      await interaction.reply({ embeds: [embed] });
+    } catch (error) {
+      console.error('Error sending embed:', error);
+      await interaction.reply({
+        embeds: [createErrorEmbed('Error', 'Failed to send the embed message.')],
+        ephemeral: true
+      });
+    }
+  }
 });
 
 // Message command handler (legacy)
@@ -648,7 +685,7 @@ client.on('messageCreate', async message => {
           { name: '🎟️ Ticket System', value: '`!ticket`, `!option`, `!ticketviewer`, `!ticketcategory`, `!ticketlog`, `!deployticketpanel`', inline: false },
           { name: '📝 Applications', value: '`!addques`, `!setoptions`, `!setchannel`, `!deployapp`, `!resetapp`', inline: false },
           { name: '🎮 Games', value: '`!guess`, `!trivia`, `!scramble`, `!rps`', inline: false },
-          { name: '🔧 Utilities', value: '`!dm`, `!msg`', inline: false }
+          { name: '🔧 Utilities', value: '`!dm`, `!msg`, `!embed`', inline: false }
         )
         .setFooter({ 
           text: 'Use !help <category> for more details', 
@@ -739,6 +776,26 @@ client.on('messageCreate', async message => {
       await channel.send(msgContent);
     } catch (error) {
       console.error('Error in !msg command:', error);
+    }
+    return;
+  }
+
+  // === EMBED COMMAND ===
+  if (lc.startsWith('!embed ')) {
+    const msgContent = raw.slice(7).trim();
+    if (!msgContent) return;
+
+    try {
+      await message.delete().catch(() => {});
+      
+      const embed = new EmbedBuilder()
+        .setDescription(msgContent)
+        .setColor('#5865F2') // Blurple color
+        .setTimestamp();
+
+      await channel.send({ embeds: [embed] });
+    } catch (error) {
+      console.error('Error in !embed command:', error);
     }
     return;
   }
@@ -1796,7 +1853,7 @@ client.on('interactionCreate', async interaction => {
   // Rating system interaction
   if (interaction.isButton() && interaction.customId.startsWith('rate_')) {
     const rating = parseInt(interaction.customId.split('_')[1]);
-    if (isNaN(rating) return;
+    if (isNaN(rating)) return;
 
     try {
       await interaction.reply({
