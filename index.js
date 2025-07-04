@@ -16,7 +16,7 @@ const {
   TextInputStyle
 } = require('discord.js');
 
-// Discord client setup
+// Initialize Discord client
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -262,11 +262,11 @@ async function closeTicket(interaction, channel, setup, reason) {
   }
 }
 
+// Event Handlers
 client.once('ready', () => {
-  console.log(`🤖 Logged in as ${client.user.tag}`);
+  console.log(`🤖 Bot logged in as ${client.user.tag}`);
 });
 
-// Message command handler
 client.on('messageCreate', async message => {
   if (message.author.bot || !message.guild) return;
 
@@ -1509,5 +1509,21 @@ client.on('interactionCreate', async interaction => {
   }
 });
 
-process.on('unhandledRejection', err => console.error(err));
-client.login(process.env.DISCORD_TOKEN);
+// Error handling
+client.on('error', error => {
+  console.error('❌ Discord client error:', error);
+});
+
+client.on('warn', warning => {
+  console.warn('⚠️ Discord client warning:', warning);
+});
+
+process.on('unhandledRejection', error => {
+  console.error('❌ Unhandled promise rejection:', error);
+});
+
+// Login to Discord
+client.login(process.env.DISCORD_TOKEN).catch(err => {
+  console.error('❌ Failed to login:', err);
+  process.exit(1);
+});
