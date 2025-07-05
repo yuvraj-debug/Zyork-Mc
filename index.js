@@ -1,21 +1,22 @@
 require('dotenv').config();
-const { 
-  Client, 
-  GatewayIntentBits, 
-  EmbedBuilder, 
-  ActionRowBuilder, 
-  StringSelectMenuBuilder, 
-  ButtonBuilder, 
-  ButtonStyle, 
-  ChannelType, 
-  Collection, 
+const {
+  Client,
+  GatewayIntentBits,
+  EmbedBuilder,
+  ActionRowBuilder,
+  StringSelectMenuBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ChannelType,
+  Collection,
   PermissionFlagsBits,
-  TextInputStyle,
   ModalBuilder,
-  TextInputBuilder
+  TextInputBuilder,
+  TextInputStyle
 } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
+const express = require('express');
 
 const client = new Client({
   intents: [
@@ -27,11 +28,11 @@ const client = new Client({
   ]
 });
 
-// Initialize collections
-client.ticketSettings = new Map();
-client.appSettings = new Map();
-client.activeApplications = new Map();
+// Initialize data structures
+client.ticketConfigs = new Map();
+client.appConfigs = new Map();
 client.activeTickets = new Map();
+client.activeApplications = new Map();
 client.cooldowns = new Map();
 client.games = new Map();
 
@@ -39,8 +40,8 @@ client.games = new Map();
 function loadData() {
   try {
     if (fs.existsSync('./data/tickets.json')) {
-      const ticketData = JSON.parse(fs.readFileSync('./data/tickets.json', 'utf8'));
-      client.ticketSettings = new Map(ticketData);
+      const data = fs.readFileSync('./data/tickets.json', 'utf8');
+      client.ticketConfigs = new Map(JSON.parse(data));
     }
   } catch (err) {
     console.error('Error loading ticket data:', err);
@@ -48,8 +49,8 @@ function loadData() {
 
   try {
     if (fs.existsSync('./data/applications.json')) {
-      const appData = JSON.parse(fs.readFileSync('./data/applications.json', 'utf8'));
-      client.appSettings = new Map(appData);
+      const data = fs.readFileSync('./data/applications.json', 'utf8');
+      client.appConfigs = new Map(JSON.parse(data));
     }
   } catch (err) {
     console.error('Error loading application data:', err);
@@ -62,15 +63,16 @@ function saveData() {
     fs.mkdirSync('./data');
   }
 
-  fs.writeFileSync('./data/tickets.json', JSON.stringify([...client.ticketSettings]), 'utf8');
-  fs.writeFileSync('./data/applications.json', JSON.stringify([...client.appSettings]), 'utf8');
+  fs.writeFileSync('./data/tickets.json', JSON.stringify([...client.ticketConfigs]), 'utf8');
+  fs.writeFileSync('./data/applications.json', JSON.stringify([...client.appConfigs]), 'utf8');
 }
 
 // Initialize games
-function initializeGames() {
+function initGames() {
+  // Trivia Game
   client.games.set('trivia', {
     name: "Trivia Challenge",
-    description: "Answer random trivia questions",
+    description: "Test your knowledge with random questions",
     questions: [
       {
         question: "What is the capital of France?",
@@ -86,19 +88,22 @@ function initializeGames() {
     scores: new Map()
   });
 
+  // Number Guessing Game
   client.games.set('guess', {
     name: "Number Guesser",
     description: "Guess a number between 1-100",
     activeGames: new Map()
   });
 
+  // Word Scramble
   client.games.set('scramble', {
     name: "Word Scramble",
     description: "Unscramble the letters to form a word",
-    words: ["discord", "javascript", "developer", "bot", "ticket", "application", "support", "moderation"],
+    words: ["discord", "javascript", "developer", "bot", "ticket"],
     activeGames: new Map()
   });
 
+  // Rock Paper Scissors
   client.games.set('rps', {
     name: "Rock Paper Scissors",
     description: "Classic RPS game against the bot",
@@ -106,7 +111,7 @@ function initializeGames() {
   });
 }
 
-// Helper function to create embeds
+// Helper functions
 function createEmbed(color, title, description, fields = [], footer = null) {
   const embed = new EmbedBuilder()
     .setColor(color)
@@ -114,57 +119,48 @@ function createEmbed(color, title, description, fields = [], footer = null) {
     .setDescription(description)
     .setTimestamp();
 
-  if (fields.length > 0) {
-    embed.addFields(fields);
-  }
-
-  if (footer) {
-    embed.setFooter({ text: footer });
-  }
+  if (fields.length > 0) embed.addFields(fields);
+  if (footer) embed.setFooter({ text: footer });
 
   return embed;
 }
 
-// Helper function to check cooldowns
-function checkCooldown(userId, commandName, cooldownSeconds) {
-  if (!client.cooldowns.has(commandName)) {
-    client.cooldowns.set(commandName, new Map());
+function checkCooldown(userId, command, cooldownSec) {
+  if (!client.cooldowns.has(command)) {
+    client.cooldowns.set(command, new Map());
   }
 
   const now = Date.now();
-  const timestamps = client.cooldowns.get(commandName);
-  const cooldownAmount = cooldownSeconds * 1000;
+  const timestamps = client.cooldowns.get(command);
+  const cooldownMs = cooldownSec * 1000;
 
   if (timestamps.has(userId)) {
-    const expirationTime = timestamps.get(userId) + cooldownAmount;
-    if (now < expirationTime) {
-      const timeLeft = (expirationTime - now) / 1000;
-      return timeLeft;
-    }
+    const expiration = timestamps.get(userId) + cooldownMs;
+    if (now < expiration) return (expiration - now) / 1000;
   }
 
   timestamps.set(userId, now);
-  setTimeout(() => timestamps.delete(userId), cooldownAmount);
+  setTimeout(() => timestamps.delete(userId), cooldownMs);
   return 0;
 }
 
-// Ticket system functions
-async function createTicket(interaction, ticketType) {
+// Ticket System Functions
+async function createTicket(interaction, type = "Support") {
   const guild = interaction.guild;
   const user = interaction.user;
-  const settings = client.ticketSettings.get(guild.id);
+  const config = client.ticketConfigs.get(guild.id);
 
-  if (!settings || !settings.channelId || !settings.categoryId) {
+  if (!config?.channelId || !config?.categoryId) {
     return interaction.reply({ 
-      content: "Ticket system is not properly configured for this server.", 
+      content: "❌ Ticket system not configured properly", 
       ephemeral: true 
     });
   }
 
-  const category = await guild.channels.fetch(settings.categoryId);
+  const category = await guild.channels.fetch(config.categoryId);
   if (!category) {
     return interaction.reply({ 
-      content: "Ticket category not found. Please contact an administrator.", 
+      content: "❌ Ticket category not found", 
       ephemeral: true 
     });
   }
@@ -188,8 +184,8 @@ async function createTicket(interaction, ticketType) {
           PermissionFlagsBits.EmbedLinks
         ]
       },
-      ...(settings.supportRoleId ? [{
-        id: settings.supportRoleId,
+      ...(config.supportRoleId ? [{
+        id: config.supportRoleId,
         allow: [
           PermissionFlagsBits.ViewChannel,
           PermissionFlagsBits.SendMessages,
@@ -204,6 +200,7 @@ async function createTicket(interaction, ticketType) {
   client.activeTickets.set(ticketChannel.id, {
     userId: user.id,
     guildId: guild.id,
+    type: type,
     createdAt: new Date(),
     claimedBy: null,
     closed: false
@@ -211,8 +208,8 @@ async function createTicket(interaction, ticketType) {
 
   const embed = createEmbed(
     0x5865F2,
-    `${ticketType || 'Support'} Ticket`,
-    `Thank you for creating a ticket! Support staff will be with you shortly.\n\nPlease describe your issue in detail.`,
+    `${type} Ticket`,
+    `Thank you for creating a ticket! Support will assist you shortly.\n\nPlease describe your issue in detail.`,
     [],
     `User: ${user.tag} | Ticket ID: ${ticketChannel.id}`
   );
@@ -220,49 +217,53 @@ async function createTicket(interaction, ticketType) {
   const buttons = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId('close_ticket')
-      .setLabel('Close Ticket')
+      .setLabel('🔒 Close')
       .setStyle(ButtonStyle.Danger),
     new ButtonBuilder()
       .setCustomId('lock_ticket')
-      .setLabel('Lock Ticket')
+      .setLabel('🔐 Lock')
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId('claim_ticket')
-      .setLabel('Claim Ticket')
-      .setStyle(ButtonStyle.Success)
+      .setLabel('🛡️ Claim')
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId('transcript_ticket')
+      .setLabel('📝 Transcript')
+      .setStyle(ButtonStyle.Primary)
   );
 
   await ticketChannel.send({
-    content: settings.supportRoleId ? `<@&${settings.supportRoleId}> <@${user.id}>` : `<@${user.id}>`,
+    content: config.supportRoleId ? `<@&${config.supportRoleId}> <@${user.id}>` : `<@${user.id}>`,
     embeds: [embed],
     components: [buttons]
   });
 
   return interaction.reply({
-    content: `Your ticket has been created: ${ticketChannel}`,
+    content: `🎫 Your ticket has been created: ${ticketChannel}`,
     ephemeral: true
   });
 }
 
-// Application system functions
+// Application System Functions
 async function startApplication(interaction, appType) {
   const guild = interaction.guild;
   const user = interaction.user;
-  const settings = client.appSettings.get(guild.id);
+  const config = client.appConfigs.get(guild.id);
 
-  if (!settings || !settings.options || !settings.options[appType]) {
+  if (!config?.options?.[appType]) {
     return interaction.reply({
-      content: "This application type is not available.",
+      content: "❌ This application type isn't available",
       ephemeral: true
     });
   }
 
-  const appConfig = settings.options[appType];
+  const appConfig = config.options[appType];
   const cooldown = checkCooldown(user.id, `app_${appType}`, appConfig.cooldown);
 
   if (cooldown > 0) {
     return interaction.reply({
-      content: `You must wait ${Math.ceil(cooldown)} seconds before submitting another application for this position.`,
+      content: `⏳ You must wait ${Math.ceil(cooldown)} seconds before applying again`,
       ephemeral: true
     });
   }
@@ -278,27 +279,26 @@ async function startApplication(interaction, appType) {
   const dmChannel = await user.createDM();
   client.activeApplications.get(user.id).dmChannel = dmChannel;
 
-  await askApplicationQuestion(user.id);
+  await askNextQuestion(user.id);
 }
 
-async function askApplicationQuestion(userId) {
+async function askNextQuestion(userId) {
   const application = client.activeApplications.get(userId);
   if (!application) return;
 
-  const settings = client.appSettings.get(application.guildId);
-  const appConfig = settings.options[application.appType];
-  const questions = settings.questions;
+  const config = client.appConfigs.get(application.guildId);
+  const questions = config.questions || [];
 
   if (application.currentQuestion >= questions.length) {
     await submitApplication(userId);
     return;
   }
 
-  const currentQuestion = questions[application.currentQuestion];
+  const question = questions[application.currentQuestion];
   const embed = createEmbed(
     0x5865F2,
     `Application Question ${application.currentQuestion + 1}/${questions.length}`,
-    currentQuestion
+    question
   );
 
   await application.dmChannel.send({ embeds: [embed] });
@@ -308,8 +308,8 @@ async function submitApplication(userId) {
   const application = client.activeApplications.get(userId);
   if (!application) return;
 
-  const settings = client.appSettings.get(application.guildId);
-  const appConfig = settings.options[application.appType];
+  const config = client.appConfigs.get(application.guildId);
+  const appConfig = config.options[application.appType];
   const user = await client.users.fetch(userId);
   const guild = await client.guilds.fetch(application.guildId);
 
@@ -319,41 +319,33 @@ async function submitApplication(userId) {
     `Applicant: ${user.tag} (${user.id})`
   );
 
-  const fields = [];
-  for (let i = 0; i < settings.questions.length; i++) {
-    fields.push({
-      name: `Question ${i + 1}`,
-      value: settings.questions[i],
-      inline: false
-    });
-    fields.push({
-      name: `Answer ${i + 1}`,
-      value: application.answers[i] || "No answer provided",
-      inline: false
-    });
+  const questions = config.questions || [];
+  for (let i = 0; i < questions.length; i++) {
+    embed.addFields(
+      { name: `Question ${i + 1}`, value: questions[i], inline: false },
+      { name: `Answer ${i + 1}`, value: application.answers[i] || "No answer", inline: false }
+    );
   }
-
-  embed.addFields(fields);
 
   const buttons = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(`app_accept_${userId}`)
-      .setLabel('Accept')
+      .setLabel('✅ Accept')
       .setStyle(ButtonStyle.Success),
     new ButtonBuilder()
       .setCustomId(`app_reject_${userId}`)
-      .setLabel('Reject')
+      .setLabel('❌ Reject')
       .setStyle(ButtonStyle.Danger),
     new ButtonBuilder()
       .setCustomId(`app_ticket_${userId}`)
-      .setLabel('Open Ticket')
+      .setLabel('🎫 Open Ticket')
       .setStyle(ButtonStyle.Primary)
   );
 
-  const channel = await guild.channels.fetch(settings.channelId);
+  const channel = await guild.channels.fetch(config.channelId);
   if (channel) {
     await channel.send({
-      content: settings.reviewRoleId ? `<@&${settings.reviewRoleId}>` : '',
+      content: config.reviewRoleId ? `<@&${config.reviewRoleId}>` : '',
       embeds: [embed],
       components: [buttons]
     });
@@ -361,16 +353,16 @@ async function submitApplication(userId) {
 
   await application.dmChannel.send({
     embeds: [createEmbed(
-      0x5865F2,
+      0x57F287,
       "Application Submitted",
-      "Your application has been submitted for review. You will be notified of the decision."
+      "Your application has been submitted for review. You'll be notified of the decision."
     )]
   });
 
   client.activeApplications.delete(userId);
 }
 
-// Game functions
+// Game Functions
 async function startTriviaGame(interaction) {
   const game = client.games.get('trivia');
   const question = game.questions[Math.floor(Math.random() * game.questions.length)];
@@ -382,10 +374,10 @@ async function startTriviaGame(interaction) {
   );
 
   const buttons = new ActionRowBuilder().addComponents(
-    ...question.options.map((option, index) => 
+    ...question.options.map((opt, i) => 
       new ButtonBuilder()
-        .setCustomId(`trivia_${index}`)
-        .setLabel(option)
+        .setCustomId(`trivia_${i}`)
+        .setLabel(opt)
         .setStyle(ButtonStyle.Primary)
     )
   );
@@ -396,238 +388,306 @@ async function startTriviaGame(interaction) {
   });
 }
 
-async function startNumberGuessGame(interaction) {
-  const game = client.games.get('guess');
-  const number = Math.floor(Math.random() * 100) + 1;
-  game.activeGames.set(interaction.user.id, {
-    number: number,
-    attempts: 0
-  });
-
-  await interaction.reply({
-    embeds: [createEmbed(
-      0xF1C40F,
-      "Number Guesser",
-      "I've picked a number between 1 and 100. Guess what it is!"
-    )]
-  });
-}
-
-// Event handlers
+// Event Handlers
 client.on('ready', () => {
-  console.log(`Logged in as ${client.user.tag}`);
+  console.log(`✅ Bot logged in as ${client.user.tag}`);
   loadData();
-  initializeGames();
+  initGames();
+
+  // Start keep-alive server
+  const app = express();
+  const PORT = process.env.PORT || 3000;
+  
+  app.get('/', (req, res) => {
+    res.send('Discord Ticket Bot is running!');
+  });
+  
+  app.listen(PORT, () => {
+    console.log(`🌐 Keep-alive server running on port ${PORT}`);
+  });
 });
 
 client.on('interactionCreate', async interaction => {
-  if (interaction.isButton()) {
-    if (interaction.customId === 'create_ticket') {
-      await createTicket(interaction);
+  try {
+    if (interaction.isButton()) {
+      if (interaction.customId === 'create_ticket') {
+        await createTicket(interaction);
+      }
+      // Handle other button interactions
+    } else if (interaction.isStringSelectMenu()) {
+      if (interaction.customId === 'ticket_type') {
+        await createTicket(interaction, interaction.values[0]);
+      } else if (interaction.customId === 'app_select') {
+        await startApplication(interaction, interaction.values[0]);
+      }
     }
-    // Handle other button interactions
-  } else if (interaction.isStringSelectMenu()) {
-    if (interaction.customId === 'ticket_type') {
-      await createTicket(interaction, interaction.values[0]);
+  } catch (error) {
+    console.error('Interaction error:', error);
+    if (interaction.replied || interaction.deferred) {
+      await interaction.followUp({ content: '❌ An error occurred', ephemeral: true });
+    } else {
+      await interaction.reply({ content: '❌ An error occurred', ephemeral: true });
     }
-    // Handle other select menu interactions
-  } else if (interaction.isModalSubmit()) {
-    // Handle modal submissions
-  } else if (interaction.isCommand()) {
-    // Handle slash commands
   }
 });
 
 client.on('messageCreate', async message => {
-  if (message.author.bot) return;
-
-  // Handle prefix commands
-  if (!message.content.startsWith('!')) return;
+  if (message.author.bot || !message.content.startsWith('!')) return;
 
   const args = message.content.slice(1).trim().split(/ +/);
   const command = args.shift().toLowerCase();
 
   try {
     switch (command) {
+      // Ticket System Commands
       case 'setchannel':
         if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-          return message.reply("You don't have permission to use this command.");
+          return message.reply("❌ You need admin permissions");
         }
         
         const channel = message.mentions.channels.first();
-        if (!channel) {
-          return message.reply("Please mention a channel.");
-        }
+        if (!channel) return message.reply("❌ Please mention a channel");
         
         const category = channel.parent;
-        if (!category) {
-          return message.reply("The channel must be in a category.");
-        }
+        if (!category) return message.reply("❌ Channel must be in a category");
         
-        const settings = client.ticketSettings.get(message.guild.id) || {};
-        settings.channelId = channel.id;
-        settings.categoryId = category.id;
-        client.ticketSettings.set(message.guild.id, settings);
+        const ticketConfig = client.ticketConfigs.get(message.guild.id) || {};
+        ticketConfig.channelId = channel.id;
+        ticketConfig.categoryId = category.id;
+        client.ticketConfigs.set(message.guild.id, ticketConfig);
         saveData();
         
         message.reply({
           embeds: [createEmbed(
             0x57F287,
             "Ticket Channel Set",
-            `Ticket panel will be created in ${channel} and new tickets will be created in the ${category} category.`
+            `Panel will appear in ${channel}\nTickets will be created in ${category}`
           )]
-        });
+        }).then(msg => setTimeout(() => msg.delete(), 10000));
         break;
-        
+
       case 'ticket':
         if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-          return message.reply("You don't have permission to use this command.");
+          return message.reply("❌ You need admin permissions");
         }
         
         const ticketMsg = args.join(' ');
-        const settings = client.ticketSettings.get(message.guild.id) || {};
-        settings.message = ticketMsg;
-        client.ticketSettings.set(message.guild.id, settings);
+        const ticketSettings = client.ticketConfigs.get(message.guild.id) || {};
+        ticketSettings.message = ticketMsg;
+        client.ticketConfigs.set(message.guild.id, ticketSettings);
         saveData();
         
         message.reply({
           embeds: [createEmbed(
             0x57F287,
             "Ticket Message Set",
-            `The ticket panel will display:\n\n${ticketMsg}`
+            `Panel will display:\n\n${ticketMsg}`
           )]
-        });
+        }).then(msg => setTimeout(() => msg.delete(), 10000));
         break;
-        
+
       case 'setoptions':
         if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-          return message.reply("You don't have permission to use this command.");
+          return message.reply("❌ You need admin permissions");
         }
         
         const options = args.join(' ').split(',').map(opt => opt.trim());
-        const settings = client.ticketSettings.get(message.guild.id) || {};
-        settings.options = options;
-        client.ticketSettings.set(message.guild.id, settings);
+        const ticketOptions = client.ticketConfigs.get(message.guild.id) || {};
+        ticketOptions.options = options;
+        client.ticketConfigs.set(message.guild.id, ticketOptions);
         saveData();
         
         message.reply({
           embeds: [createEmbed(
             0x57F287,
             "Ticket Options Set",
-            `Ticket options:\n${options.map(opt => `- ${opt}`).join('\n')}`
+            `Options:\n${options.map(opt => `- ${opt}`).join('\n')}`
           )]
-        });
+        }).then(msg => setTimeout(() => msg.delete(), 10000));
         break;
-        
+
       case 'deployticketpanel':
         if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-          return message.reply("You don't have permission to use this command.");
+          return message.reply("❌ You need admin permissions");
         }
         
-        const settings = client.ticketSettings.get(message.guild.id);
-        if (!settings || !settings.channelId || !settings.message) {
-          return message.reply("Ticket system is not properly configured. Use !setchannel, !ticket, and !setoptions first.");
+        const panelConfig = client.ticketConfigs.get(message.guild.id);
+        if (!panelConfig?.channelId || !panelConfig?.message) {
+          return message.reply("❌ Configure ticket system first");
         }
         
-        const channel = await message.guild.channels.fetch(settings.channelId);
-        if (!channel) {
-          return message.reply("Ticket channel not found.");
-        }
+        const panelChannel = await message.guild.channels.fetch(panelConfig.channelId);
+        if (!panelChannel) return message.reply("❌ Channel not found");
         
         const embed = createEmbed(
           0x5865F2,
           "Support Tickets",
-          settings.message
+          panelConfig.message
         );
         
         const selectMenu = new StringSelectMenuBuilder()
           .setCustomId('ticket_type')
-          .setPlaceholder('Select a ticket type')
+          .setPlaceholder('Select ticket type')
           .addOptions(
-            settings.options.map(opt => ({
+            panelConfig.options.map(opt => ({
               label: opt,
               value: opt.toLowerCase().replace(/\s+/g, '_')
             }))
           );
         
-        const actionRow = new ActionRowBuilder().addComponents(selectMenu);
+        const row = new ActionRowBuilder().addComponents(selectMenu);
         
-        await channel.send({
-          embeds: [embed],
-          components: [actionRow]
-        });
+        await panelChannel.send({ embeds: [embed], components: [row] });
         
         message.reply({
           embeds: [createEmbed(
             0x57F287,
-            "Ticket Panel Deployed",
-            `Ticket panel has been created in ${channel}`
+            "Panel Deployed",
+            `Ticket panel created in ${panelChannel}`
           )]
-        });
+        }).then(msg => setTimeout(() => msg.delete(), 10000));
         break;
+
+      // Application System Commands
+      case 'app':
+        if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+          return message.reply("❌ You need admin permissions");
+        }
         
-      // Add other commands similarly...
-      
+        const appMsg = args.join(' ');
+        const appConfig = client.appConfigs.get(message.guild.id) || {};
+        appConfig.message = appMsg;
+        client.appConfigs.set(message.guild.id, appConfig);
+        saveData();
+        
+        message.reply({
+          embeds: [createEmbed(
+            0x57F287,
+            "App Message Set",
+            `Panel will display:\n\n${appMsg}`
+          )]
+        }).then(msg => setTimeout(() => msg.delete(), 10000));
+        break;
+
+      case 'addoptions':
+        if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+          return message.reply("❌ You need admin permissions");
+        }
+        
+        const appOptions = args.join(' ').split(',').map(opt => {
+          const [label, cooldown] = opt.trim().split('|');
+          return { label, cooldown: parseCooldown(cooldown.trim()) };
+        });
+        
+        const appOptsConfig = client.appConfigs.get(message.guild.id) || {};
+        appOptsConfig.options = appOptsConfig.options || {};
+        
+        appOptions.forEach(opt => {
+          appOptsConfig.options[opt.label.toLowerCase().replace(/\s+/g, '_')] = {
+            label: opt.label,
+            cooldown: opt.cooldown
+          };
+        });
+        
+        client.appConfigs.set(message.guild.id, appOptsConfig);
+        saveData();
+        
+        message.reply({
+          embeds: [createEmbed(
+            0x57F287,
+            "App Options Added",
+            `Options:\n${appOptions.map(opt => `- ${opt.label} (${formatCooldown(opt.cooldown)})`).join('\n')}`
+          )]
+        }).then(msg => setTimeout(() => msg.delete(), 10000));
+        break;
+
+      // Utility Commands
       case 'help':
         const helpEmbed = createEmbed(
           0x5865F2,
           "Bot Commands Help",
-          "Here are all the available commands:"
+          "Here are all available commands:"
         );
         
         helpEmbed.addFields(
           {
             name: "Ticket System",
-            value: "`!setchannel #channel` - Set ticket channel\n`!ticket message` - Set ticket message\n`!setoptions option1,option2` - Set ticket options\n`!deployticketpanel` - Deploy ticket panel"
+            value: "`!setchannel #channel` - Set ticket channel\n`!ticket message` - Set panel message\n`!setoptions option1,option2` - Set ticket types\n`!deployticketpanel` - Create panel"
           },
           {
             name: "Application System",
-            value: "`!app message` - Set application message\n`!ques1 question` - Add question 1\n`!addoptions Staff|1d,Media|5m` - Add application options\n`!deployapp` - Deploy application panel"
+            value: "`!app message` - Set app message\n`!addoptions Role|1d,Other|30m` - Add app options\n`!deployapp` - Create app panel"
           },
           {
             name: "Utilities",
-            value: "`!dm @role message` - DM a role\n`!msg message` - Send anonymous message\n`!embed color message` - Send embed message"
+            value: "`!dm @role message` - DM a role\n`!msg message` - Send anonymous message\n`!embed color message` - Send embed\n`!help` - Show this help"
           },
           {
             name: "Games",
-            value: "`!trivia` - Start trivia game\n`!guess` - Number guessing game\n`!scramble` - Word scramble game\n`!rps` - Rock Paper Scissors"
+            value: "`!trivia` - Trivia game\n`!guess` - Number guesser\n`!scramble` - Word scramble\n`!rps` - Rock Paper Scissors"
           }
         );
         
         message.reply({ embeds: [helpEmbed] });
         break;
-        
+
+      // Game Commands
       case 'trivia':
         await startTriviaGame(message);
         break;
-        
-      case 'guess':
-        await startNumberGuessGame(message);
-        break;
-        
-      // Add other game commands...
-        
+
       default:
-        message.reply("Unknown command. Use `!help` to see available commands.");
+        message.reply("❌ Unknown command. Use `!help`").then(msg => setTimeout(() => msg.delete(), 5000));
     }
   } catch (error) {
-    console.error("Error handling command:", error);
-    message.reply("There was an error processing your command.");
+    console.error('Command error:', error);
+    message.reply("❌ An error occurred").then(msg => setTimeout(() => msg.delete(), 5000));
   }
 });
 
-// Start the bot
-client.login(process.env.DISCORD_TOKEN);
+// Helper functions for application system
+function parseCooldown(input) {
+  if (!input) return 0;
+  
+  const match = input.match(/^(\d+)([smhd])$/);
+  if (!match) return 0;
+  
+  const num = parseInt(match[1]);
+  const unit = match[2];
+  
+  switch (unit) {
+    case 's': return num;
+    case 'm': return num * 60;
+    case 'h': return num * 60 * 60;
+    case 'd': return num * 60 * 60 * 24;
+    default: return 0;
+  }
+}
 
-// Keep alive for Render
-const express = require('express');
-const app = express();
-const PORT = process.env.PORT || 3000;
+function formatCooldown(seconds) {
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
+  return `${Math.floor(seconds / 86400)}d`;
+}
 
-app.get('/', (req, res) => {
-  res.send('Discord Ticket Bot is running!');
+// Login to Discord
+client.login(process.env.DISCORD_TOKEN).catch(err => {
+  console.error('Login error:', err);
+  process.exit(1);
 });
 
-app.listen(PORT, () => {
-  console.log(`Keep-alive server running on port ${PORT}`);
+// Handle process termination
+process.on('SIGINT', () => {
+  saveData();
+  process.exit();
+});
+
+process.on('SIGTERM', () => {
+  saveData();
+  process.exit();
+});
+
+process.on('unhandledRejection', err => {
+  console.error('Unhandled rejection:', err);
 });
