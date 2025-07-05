@@ -1,7 +1,18 @@
 require('dotenv').config();
+const express = require('express');
 const { Client, IntentsBitField, EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, ChannelType, PermissionFlagsBits } = require('discord.js');
-const { REST } = require('@discordjs/rest');
-const { Routes } = require('discord-api-types/v10');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Basic HTTP server for Render
+app.get('/', (req, res) => {
+  res.send('Discord Bot is running!');
+});
+
+app.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
+});
 
 const client = new Client({
   intents: [
@@ -603,8 +614,7 @@ client.on('messageCreate', async message => {
             .setCustomId(`trivia_${i}`)
             .setLabel(opt)
             .setStyle(ButtonStyle.Primary)
-        )
-      );
+      ) );
       
       message.channel.send({ embeds: [embed], components: [buttons] });
     }
