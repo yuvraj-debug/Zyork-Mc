@@ -750,6 +750,7 @@ client.on('messageCreate', async message => {
           .setCustomId(`trivia_${i}`)
           .setLabel(opt)
           .setStyle(ButtonStyle.Primary)
+      )
     );
     
     message.channel.send({ embeds: [embed], components: [buttons] });
