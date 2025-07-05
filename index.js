@@ -1,4 +1,5 @@
 const { Client, IntentsBitField } = require('discord.js');
+const http = require('http');
 require('dotenv').config();
 
 const client = new Client({
@@ -9,6 +10,17 @@ const client = new Client({
     IntentsBitField.Flags.MessageContent,
     IntentsBitField.Flags.DirectMessages
   ]
+});
+
+// Create HTTP server for Render health checks
+const server = http.createServer((req, res) => {
+  res.writeHead(200);
+  res.end('Discord bot is running');
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
 
 client.on('ready', () => {
@@ -86,4 +98,10 @@ client.on('messageCreate', async (message) => {
   }
 });
 
-client.login(process.env.DISCORD_TOKEN);
+const token = process.env.DISCORD_TOKEN;
+if (!token) {
+  console.error('No token provided in DISCORD_TOKEN environment variable');
+  process.exit(1);
+}
+
+client.login(token).catch(console.error);

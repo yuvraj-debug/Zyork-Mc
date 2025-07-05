@@ -1,6 +1,17 @@
 {
+  "name": "discord-bot",
+  "version": "1.0.0",
+  "description": "Discord bot with DM and channel messaging functionality",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
   "dependencies": {
     "discord.js": "^14.21.0",
     "dotenv": "^17.0.1"
+  },
+  "engines": {
+    "node": ">=16.9.0"
   }
 }
