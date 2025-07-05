@@ -509,6 +509,7 @@ client.on('interactionCreate', async (interaction) => {
     const ticketSettings = await db.get(`ticketSettings.${interaction.guild.id}`);
     const optionData = ticketSettings.options?.[option];
     
+<<<<<<< HEAD
     await createTicket(interaction, optionData?.text || option);
   }
 });
@@ -554,6 +555,15 @@ async function createTicket(interaction, reason) {
       `Ticket #${ticketNumber}`,
       `**Created by:** ${interaction.user.tag}\n**Reason:** ${reason}\n\nPlease wait for staff assistance.`,
       '#5865F2'
+=======
+    const buttons = new ActionRowBuilder().addComponents(
+      question.options.map((opt, i) => 
+        new ButtonBuilder()
+          .setCustomId(`trivia_${i}`)
+          .setLabel(opt)
+          .setStyle(ButtonStyle.Primary)
+      )
+>>>>>>> 8a24307adb7b9aef806e30f5101ae8254f016f34
     );
 
     const buttons = new ActionRowBuilder().addComponents(
