@@ -91,7 +91,7 @@ function createEmbed(title, description, color = config.colors.blue) {
 }
 
 function sendConfirmation(message, content) {
-  const embed = createEmbed("Success", content, config.colors.green);
+  const embed = createEmbed("✅ Success", content, config.colors.green);
   message.channel.send({ embeds: [embed] }).then(msg => {
     setTimeout(() => msg.delete(), 5000);
   });
@@ -99,11 +99,33 @@ function sendConfirmation(message, content) {
 }
 
 function sendError(message, content) {
-  const embed = createEmbed("Error", content, config.colors.red);
+  const embed = createEmbed("❌ Error", content, config.colors.red);
   message.channel.send({ embeds: [embed] }).then(msg => {
     setTimeout(() => msg.delete(), 5000);
   });
   message.delete().catch(console.error);
+}
+
+function parseEmoji(emojiString) {
+  if (!emojiString) return null;
+  
+  // Check if it's a custom emoji
+  const customEmojiMatch = emojiString.match(/<a?:(\w+):(\d+)>/);
+  if (customEmojiMatch) {
+    return {
+      id: customEmojiMatch[2],
+      name: customEmojiMatch[1],
+      animated: emojiString.startsWith('<a:')
+    };
+  }
+  
+  // Check if it's a unicode emoji
+  const unicodeEmojiMatch = emojiString.match(/\p{Emoji}/u);
+  if (unicodeEmojiMatch) {
+    return unicodeEmojiMatch[0];
+  }
+  
+  return null;
 }
 
 // Ticket system functions
@@ -122,7 +144,7 @@ async function createTicket(interaction, type) {
   
   const ticketNumber = Math.floor(Math.random() * 90000) + 10000;
   const ticketChannel = await guild.channels.create({
-    name: `ticket-${ticketNumber}`,
+    name: `ticket-${member.user.username}-${ticketNumber}`,
     type: ChannelType.GuildText,
     parent: category.id,
     permissionOverwrites: [
@@ -145,31 +167,37 @@ async function createTicket(interaction, type) {
     creator: member.id,
     type: type,
     claimedBy: null,
-    locked: false
+    locked: false,
+    createdAt: new Date()
   });
   
   const embed = createEmbed(
-    `Ticket - ${type}`,
-    `Thank you for creating a ticket!\n\nSupport will be with you shortly.\n\nPlease describe your issue in detail.`,
+    "🎟️ Ticket Created",
+    `Thank you for creating a ticket!\n\n**Type:** ${type}\n**Ticket ID:** ${ticketNumber}\n\nSupport will be with you shortly. Please describe your issue in detail.`,
     config.colors.blue
-  );
+  )
+  .setFooter({ text: `Opened at ${new Date().toLocaleString()}` });
   
   const buttons = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId('claim_ticket')
       .setLabel('Claim')
+      .setEmoji('🙋')
       .setStyle(ButtonStyle.Primary),
     new ButtonBuilder()
       .setCustomId('lock_ticket')
       .setLabel('Lock')
+      .setEmoji('🔒')
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId('close_ticket')
       .setLabel('Close')
+      .setEmoji('🔐')
       .setStyle(ButtonStyle.Danger),
     new ButtonBuilder()
       .setCustomId('rate_ticket')
       .setLabel('Rate')
+      .setEmoji('⭐')
       .setStyle(ButtonStyle.Success)
   );
   
@@ -180,7 +208,7 @@ async function createTicket(interaction, type) {
   });
   
   interaction.reply({
-    content: `Your ticket has been created: ${ticketChannel}`,
+    content: `🎟️ Your ticket has been created: ${ticketChannel}`,
     ephemeral: true
   });
 }
@@ -190,38 +218,90 @@ async function closeTicket(channel, interaction, reason = "No reason provided") 
   if (!ticket) return;
   
   const creator = await client.users.fetch(ticket.creator);
-  const embed = createEmbed(
-    "Ticket Closed",
-    `Ticket closed by ${interaction.user.tag}\nReason: ${reason}`,
-    config.colors.red
-  );
-  
-  await channel.send({ embeds: [embed] });
+  const closedAt = new Date();
+  const duration = Math.floor((closedAt - ticket.createdAt) / 1000); // in seconds
   
   // Create transcript
   const messages = await channel.messages.fetch({ limit: 100 });
   let transcript = `=== Ticket Transcript ===\n`;
+  transcript += `Ticket: ${channel.name}\n`;
   transcript += `Creator: ${creator.tag} (${creator.id})\n`;
   transcript += `Type: ${ticket.type}\n`;
+  transcript += `Claimed by: ${ticket.claimedBy ? `<@${ticket.claimedBy}>` : "Not claimed"}\n`;
   transcript += `Closed by: ${interaction.user.tag} (${interaction.user.id})\n`;
-  transcript += `Reason: ${reason}\n\n`;
+  transcript += `Reason: ${reason}\n`;
+  transcript += `Opened at: ${ticket.createdAt.toLocaleString()}\n`;
+  transcript += `Closed at: ${closedAt.toLocaleString()}\n`;
+  transcript += `Duration: ${Math.floor(duration / 60)}m ${duration % 60}s\n`;
+  transcript += `Total messages: ${messages.size}\n\n`;
   
   messages.reverse().forEach(msg => {
-    transcript += `[${msg.author.tag}]: ${msg.content}\n`;
+    transcript += `[${msg.author.tag}] [${msg.createdAt.toLocaleString()}]: ${msg.content}\n`;
   });
   
   // Send transcript to creator
   try {
+    const transcriptEmbed = createEmbed(
+      "📩 Ticket Transcript",
+      `Here's the transcript of your closed ticket:\n\n**Ticket Channel:** ${channel.name}\n**Closed by:** ${interaction.user.tag}\n**Reason:** ${reason}\n**Closed at:** ${closedAt.toLocaleString()}`,
+      config.colors.purple
+    );
+    
+    const ratingButtons = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('rate_1')
+        .setLabel('1★')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('rate_2')
+        .setLabel('2★')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('rate_3')
+        .setLabel('3★')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('rate_4')
+        .setLabel('4★')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('rate_5')
+        .setLabel('5★')
+        .setStyle(ButtonStyle.Secondary)
+    );
+    
+    const feedbackEmbed = createEmbed(
+      "🎟️ Your Ticket has been closed",
+      `We value your feedback and would appreciate your rating of our support.\n\nPlease take a moment to share your satisfaction level by choosing a rating between 1-5 stars below. Your input is valuable to us!`,
+      config.colors.blue
+    )
+    .addFields(
+      { name: '• Ticket Information', value: `**Category:** ${ticket.type}\n**Claimed by:** ${ticket.claimedBy ? `<@${ticket.claimedBy}>` : "Not claimed"}\n**Total Messages:** ${messages.size}\n**Duration:** ${Math.floor(duration / 60)}m ${duration % 60}s` },
+      { name: 'Closed at', value: closedAt.toLocaleString(), inline: true }
+    );
+    
     await creator.send({
-      content: "Here's your ticket transcript:",
+      content: `📩 Here's the transcript of your closed ticket:\n\n${creator.tag} [${ticket.createdAt.toLocaleString()}]: 🎫 <@${creator.id}> opened **${ticket.type}** ticket. <@&${config.ticketPanel.viewerRole}>`,
       files: [{
         attachment: Buffer.from(transcript),
-        name: `ticket-${channel.name}.txt`
-      }]
+        name: `transcript-${channel.name}.txt`
+      }],
+      embeds: [feedbackEmbed],
+      components: [ratingButtons]
     });
   } catch (err) {
     console.error("Failed to send transcript:", err);
   }
+  
+  // Send closing message in ticket channel
+  const closeEmbed = createEmbed(
+    "🎟️ Ticket Closed",
+    `This ticket has been closed by ${interaction.user.tag}\n\n**Reason:** ${reason}\n\nChannel will be deleted shortly.`,
+    config.colors.red
+  )
+  .setFooter({ text: `Closed at ${closedAt.toLocaleString()}` });
+  
+  await channel.send({ embeds: [closeEmbed] });
   
   // Delete channel after delay
   setTimeout(() => {
@@ -243,7 +323,7 @@ async function startApplication(interaction, appType) {
   if (cooldown && cooldown > Date.now()) {
     const remaining = Math.ceil((cooldown - Date.now()) / 1000);
     return interaction.reply({
-      content: `You're on cooldown for this application. Please try again in ${remaining} seconds.`,
+      content: `⏳ You're on cooldown for this application. Please try again in ${remaining} seconds.`,
       ephemeral: true
     });
   }
@@ -261,7 +341,7 @@ async function startApplication(interaction, appType) {
     
     if (!question) {
       return interaction.reply({
-        content: "This application has no questions configured.",
+        content: "❌ This application has no questions configured.",
         ephemeral: true
       });
     }
@@ -275,7 +355,7 @@ async function startApplication(interaction, appType) {
     
     const guild = interaction.guild;
     const dmEmbed = createEmbed(
-      `Application from ${guild.name}`,
+      `📝 Application from ${guild.name}`,
       question
     )
     .setThumbnail(guild.iconURL())
@@ -283,13 +363,13 @@ async function startApplication(interaction, appType) {
     
     await dmChannel.send({ embeds: [dmEmbed] });
     await interaction.reply({
-      content: "Check your DMs to complete the application!",
+      content: "📬 Check your DMs to complete the application!",
       ephemeral: true
     });
   } catch (err) {
     console.error("Failed to start application:", err);
     interaction.reply({
-      content: "Failed to send you a DM. Please check your privacy settings.",
+      content: "❌ Failed to send you a DM. Please check your privacy settings.",
       ephemeral: true
     });
   }
@@ -322,8 +402,8 @@ async function submitApplication(userId) {
   const guild = application.guild;
   
   const embed = createEmbed(
-    `New Application: ${application.appType}`,
-    `Applicant: ${user.tag} (${user.id})`,
+    `📄 New Application: ${application.appType}`,
+    `**Applicant:** ${user.tag} (${user.id})`,
     config.colors.purple
   )
   .setThumbnail(guild.iconURL())
@@ -332,7 +412,7 @@ async function submitApplication(userId) {
   application.answers.forEach((answer, index) => {
     const question = config.application.questions[index] || `Question ${index + 1}`;
     embed.addFields({
-      name: question,
+      name: `📌 ${question}`,
       value: answer || "No answer provided",
       inline: false
     });
@@ -342,14 +422,17 @@ async function submitApplication(userId) {
     new ButtonBuilder()
       .setCustomId(`app_accept_${userId}`)
       .setLabel('Accept')
+      .setEmoji('✅')
       .setStyle(ButtonStyle.Success),
     new ButtonBuilder()
       .setCustomId(`app_reject_${userId}`)
       .setLabel('Reject')
+      .setEmoji('❌')
       .setStyle(ButtonStyle.Danger),
     new ButtonBuilder()
       .setCustomId(`app_ticket_${userId}`)
       .setLabel('Open Ticket')
+      .setEmoji('🎟️')
       .setStyle(ButtonStyle.Primary)
   );
   
@@ -366,7 +449,7 @@ async function submitApplication(userId) {
   user.send({
     embeds: [
       createEmbed(
-        "Application Submitted",
+        "📩 Application Submitted",
         "Your application has been submitted! We'll review it shortly.",
         config.colors.green
       )
@@ -388,7 +471,7 @@ client.on('messageCreate', async message => {
     
     const msg = message.content.slice(8);
     config.ticketPanel.message = msg;
-    sendConfirmation(message, "Ticket panel message updated!");
+    sendConfirmation(message, "🎟️ Ticket panel message updated!");
   }
   
   if (message.content.startsWith('!setoptions ')) {
@@ -396,14 +479,19 @@ client.on('messageCreate', async message => {
       return sendError(message, "You don't have permission to use this command.");
     }
     
-    const options = message.content.slice(11).split(',').map(opt => opt.trim());
-    config.ticketPanel.options = options.map(opt => ({
-      label: opt,
-      value: opt.toLowerCase().replace(/\s+/g, '_'),
-      description: `Open a ${opt} ticket`
-    }));
+    const options = message.content.slice(11).split(',').map(opt => {
+      const parts = opt.trim().split('|');
+      const emoji = parts.length > 1 ? parseEmoji(parts[1].trim()) : null;
+      return {
+        label: parts[0].trim(),
+        value: parts[0].trim().toLowerCase().replace(/\s+/g, '_'),
+        description: `Open a ${parts[0].trim()} ticket`,
+        emoji: emoji
+      };
+    });
     
-    sendConfirmation(message, `Ticket options set to: ${options.join(', ')}`);
+    config.ticketPanel.options = options;
+    sendConfirmation(message, `🎟️ Ticket options set to: ${options.map(opt => opt.label).join(', ')}`);
   }
   
   if (message.content.startsWith('!setchannel ')) {
@@ -417,7 +505,7 @@ client.on('messageCreate', async message => {
     }
     
     config.ticketPanel.channelId = channelId;
-    sendConfirmation(message, `Ticket channel set to: <#${channelId}>`);
+    sendConfirmation(message, `🎟️ Ticket channel set to: <#${channelId}>`);
   }
   
   if (message.content.startsWith('!setrole ')) {
@@ -431,7 +519,7 @@ client.on('messageCreate', async message => {
     }
     
     config.ticketPanel.viewerRole = roleId;
-    sendConfirmation(message, `Ticket viewer role set to: <@&${roleId}>`);
+    sendConfirmation(message, `🎟️ Ticket viewer role set to: <@&${roleId}>`);
   }
   
   if (message.content === '!deployticketpanel') {
@@ -448,14 +536,19 @@ client.on('messageCreate', async message => {
       return sendError(message, "Invalid channel ID. Please set a new one with !setchannel");
     }
     
-    const embed = createEmbed("Ticket System", config.ticketPanel.message);
+    const embed = createEmbed(
+      "🎟️ Open a Ticket",
+      config.ticketPanel.message,
+      config.colors.blue
+    );
     
     const options = config.ticketPanel.options.length > 0 
       ? config.ticketPanel.options 
       : [{ 
           label: "General Support", 
           value: "general_support",
-          description: "Open a general support ticket"
+          description: "Open a general support ticket",
+          emoji: '❓'
         }];
     
     const dropdown = new ActionRowBuilder().addComponents(
@@ -466,7 +559,7 @@ client.on('messageCreate', async message => {
     );
     
     await channel.send({ embeds: [embed], components: [dropdown] });
-    sendConfirmation(message, "Ticket panel deployed successfully!");
+    sendConfirmation(message, "🎟️ Ticket panel deployed successfully!");
   }
   
   // Application commands
@@ -477,7 +570,7 @@ client.on('messageCreate', async message => {
     
     const msg = message.content.slice(5);
     config.application.message = msg;
-    sendConfirmation(message, "Application panel message updated!");
+    sendConfirmation(message, "📝 Application panel message updated!");
   }
   
   if (message.content.startsWith('!ques')) {
@@ -494,7 +587,7 @@ client.on('messageCreate', async message => {
     }
     
     config.application.questions[index] = question;
-    sendConfirmation(message, `Question ${index + 1} set to: ${question}`);
+    sendConfirmation(message, `📝 Question ${index + 1} set to: ${question}`);
   }
   
   if (message.content.startsWith('!addoptions ')) {
@@ -504,10 +597,12 @@ client.on('messageCreate', async message => {
     
     const options = message.content.slice(11).split(',').map(opt => {
       const parts = opt.trim().split('|');
+      const emoji = parts.length > 2 ? parseEmoji(parts[2].trim()) : null;
       return {
         label: parts[0].trim(),
         cooldown: parts[1] ? parts[1].trim() : null,
-        description: `Apply for ${parts[0].trim()} position`
+        description: `Apply for ${parts[0].trim()} position`,
+        emoji: emoji
       };
     });
     
@@ -515,10 +610,11 @@ client.on('messageCreate', async message => {
       label: opt.label,
       value: opt.label.toLowerCase().replace(/\s+/g, '_'),
       description: opt.description,
-      cooldown: opt.cooldown
+      cooldown: opt.cooldown,
+      emoji: opt.emoji
     }));
     
-    sendConfirmation(message, `Application options added: ${options.map(opt => opt.label).join(', ')}`);
+    sendConfirmation(message, `📝 Application options added: ${options.map(opt => opt.label).join(', ')}`);
   }
   
   if (message.content === '!deployapp') {
@@ -535,7 +631,11 @@ client.on('messageCreate', async message => {
       return sendError(message, "Invalid channel ID. Please set a new one with !setappchannel");
     }
     
-    const embed = createEmbed("Application System", config.application.message);
+    const embed = createEmbed(
+      "📝 Application System",
+      config.application.message,
+      config.colors.purple
+    );
     
     const options = config.application.options.length > 0 
       ? config.application.options 
@@ -543,7 +643,8 @@ client.on('messageCreate', async message => {
           label: "Staff Application", 
           value: "staff_application", 
           description: "Apply for staff position",
-          cooldown: "1d" 
+          cooldown: "1d",
+          emoji: '👔'
         }];
     
     const buttons = new ActionRowBuilder().addComponents(
@@ -551,12 +652,13 @@ client.on('messageCreate', async message => {
         new ButtonBuilder()
           .setCustomId(`start_app_${opt.value}`)
           .setLabel(opt.label)
+          .setEmoji(opt.emoji || '📝')
           .setStyle(ButtonStyle.Primary)
       )
     );
     
     await channel.send({ embeds: [embed], components: [buttons] });
-    sendConfirmation(message, "Application panel deployed successfully!");
+    sendConfirmation(message, "📝 Application panel deployed successfully!");
   }
   
   if (message.content.startsWith('!setappchannel ')) {
@@ -570,7 +672,7 @@ client.on('messageCreate', async message => {
     }
     
     config.application.channelId = channelId;
-    sendConfirmation(message, `Application channel set to: <#${channelId}>`);
+    sendConfirmation(message, `📝 Application channel set to: <#${channelId}>`);
   }
   
   // Utility commands
@@ -595,7 +697,7 @@ client.on('messageCreate', async message => {
     for (const member of roleMembers.values()) {
       try {
         const dmEmbed = createEmbed(
-          `Message from ${message.guild.name}`,
+          `📩 Message from ${message.guild.name}`,
           content
         )
         .setThumbnail(message.guild.iconURL())
@@ -608,7 +710,7 @@ client.on('messageCreate', async message => {
       }
     }
     
-    sendConfirmation(message, `DM sent to ${success} members (${failed} failed)`);
+    sendConfirmation(message, `📩 DM sent to ${success} members (${failed} failed)`);
   }
   
   if (message.content.startsWith('!msg ')) {
@@ -640,7 +742,7 @@ client.on('messageCreate', async message => {
   // Game commands
   if (message.content === '!trivia') {
     const question = games.trivia.questions[0];
-    const embed = createEmbed("Trivia", question.question, config.colors.yellow);
+    const embed = createEmbed("❓ Trivia", question.question, config.colors.yellow);
     
     const buttons = new ActionRowBuilder().addComponents(
       question.options.map((opt, i) => 
@@ -648,34 +750,36 @@ client.on('messageCreate', async message => {
           .setCustomId(`trivia_${i}`)
           .setLabel(opt)
           .setStyle(ButtonStyle.Primary)
-      )
     );
     
     message.channel.send({ embeds: [embed], components: [buttons] });
   }
   else if (message.content === '!tictactoe') {
-    const embed = createEmbed("Tic Tac Toe", "React with numbers to play!", config.colors.yellow);
+    const embed = createEmbed("⭕ Tic Tac Toe", "React with numbers to play!", config.colors.yellow);
     message.channel.send({ embeds: [embed] });
   }
   else if (message.content === '!hangman') {
-    const embed = createEmbed("Hangman", "Guess the word by typing letters!", config.colors.yellow);
+    const embed = createEmbed("🧵 Hangman", "Guess the word by typing letters!", config.colors.yellow);
     message.channel.send({ embeds: [embed] });
   }
   else if (message.content === '!rps') {
-    const embed = createEmbed("Rock Paper Scissors", "Choose your move!", config.colors.yellow);
+    const embed = createEmbed("✂️ Rock Paper Scissors", "Choose your move!", config.colors.yellow);
     
     const buttons = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId('rps_rock')
         .setLabel('Rock')
+        .setEmoji('🪨')
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
         .setCustomId('rps_paper')
         .setLabel('Paper')
+        .setEmoji('📄')
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
         .setCustomId('rps_scissors')
         .setLabel('Scissors')
+        .setEmoji('✂️')
         .setStyle(ButtonStyle.Primary)
     );
     
@@ -685,19 +789,31 @@ client.on('messageCreate', async message => {
     const number = Math.floor(Math.random() * 100) + 1;
     games.guess[message.channel.id] = number;
     
-    const embed = createEmbed("Guess the Number", "I'm thinking of a number between 1 and 100. Guess it!", config.colors.yellow);
+    const embed = createEmbed("🔢 Guess the Number", "I'm thinking of a number between 1 and 100. Guess it!", config.colors.yellow);
     message.channel.send({ embeds: [embed] });
   }
   
   // Help command
   if (message.content === '!help') {
-    const embed = createEmbed("Bot Commands", "Here are all available commands:", config.colors.blue);
+    const embed = createEmbed("❔ Bot Commands", "Here are all available commands:", config.colors.blue);
     
     embed.addFields(
-      { name: "Ticket System", value: "`!ticket [msg]` - Set ticket panel message\n`!setoptions option1, option2` - Set ticket options\n`!setchannel #channel` - Set ticket channel\n`!setrole @role` - Set ticket viewer role\n`!deployticketpanel` - Deploy ticket panel" },
-      { name: "Application System", value: "`!app [msg]` - Set application message\n`!ques1 [question]` - Set question 1 (use ques2, ques3, etc.)\n`!addoptions Option1|1d, Option2|5m` - Add application options\n`!setappchannel #channel` - Set application channel\n`!deployapp` - Deploy application panel" },
-      { name: "Utility", value: "`!dm @role [msg]` - DM all members with a role\n`!msg [content]` - Send a message (deletes command)\n`!embed [color] [msg]` - Send an embed message\n`!help` - Show this help menu" },
-      { name: "Games", value: "`!trivia` - Play Trivia\n`!tictactoe` - Play Tic Tac Toe\n`!hangman` - Play Hangman\n`!rps` - Play Rock Paper Scissors\n`!guess` - Play Number Guessing" }
+      { 
+        name: "🎟️ Ticket System", 
+        value: "`!ticket [msg]` - Set ticket panel message\n`!setoptions option1|emoji, option2|emoji` - Set ticket options with optional emoji\n`!setchannel #channel` - Set ticket channel\n`!setrole @role` - Set ticket viewer role\n`!deployticketpanel` - Deploy ticket panel" 
+      },
+      { 
+        name: "📝 Application System", 
+        value: "`!app [msg]` - Set application message\n`!ques1 [question]` - Set question 1 (use ques2, ques3, etc.)\n`!addoptions Option1|1d|emoji, Option2|5m|emoji` - Add application options with cooldown and emoji\n`!setappchannel #channel` - Set application channel\n`!deployapp` - Deploy application panel" 
+      },
+      { 
+        name: "🛠️ Utility", 
+        value: "`!dm @role [msg]` - DM all members with a role\n`!msg [content]` - Send a message (deletes command)\n`!embed [color] [msg]` - Send an embed message\n`!help` - Show this help menu" 
+      },
+      { 
+        name: "🎮 Games", 
+        value: "`!trivia` - Play Trivia\n`!tictactoe` - Play Tic Tac Toe\n`!hangman` - Play Hangman\n`!rps` - Play Rock Paper Scissors\n`!guess` - Play Number Guessing" 
+      }
     );
     
     message.channel.send({ embeds: [embed] });
@@ -721,7 +837,7 @@ client.on('interactionCreate', async interaction => {
       
       if (ticket.claimedBy) {
         return interaction.reply({
-          content: `This ticket is already claimed by <@${ticket.claimedBy}>`,
+          content: `❌ This ticket is already claimed by <@${ticket.claimedBy}>`,
           ephemeral: true
         });
       }
@@ -730,13 +846,13 @@ client.on('interactionCreate', async interaction => {
       activeTickets.set(interaction.channel.id, ticket);
       
       const embed = createEmbed(
-        "Ticket Claimed",
+        "🙋 Ticket Claimed",
         `This ticket has been claimed by ${interaction.user.tag}`,
         config.colors.green
       );
       
       await interaction.channel.send({ embeds: [embed] });
-      await interaction.reply({ content: "You've claimed this ticket!", ephemeral: true });
+      await interaction.reply({ content: "✅ You've claimed this ticket!", ephemeral: true });
     }
     
     if (interaction.customId === 'lock_ticket') {
@@ -745,7 +861,7 @@ client.on('interactionCreate', async interaction => {
       
       if (ticket.locked) {
         return interaction.reply({
-          content: "This ticket is already locked.",
+          content: "❌ This ticket is already locked.",
           ephemeral: true
         });
       }
@@ -759,13 +875,13 @@ client.on('interactionCreate', async interaction => {
       });
       
       const embed = createEmbed(
-        "Ticket Locked",
+        "🔒 Ticket Locked",
         `This ticket has been locked by ${interaction.user.tag}`,
         config.colors.yellow
       );
       
       await interaction.channel.send({ embeds: [embed] });
-      await interaction.reply({ content: "You've locked this ticket!", ephemeral: true });
+      await interaction.reply({ content: "✅ You've locked this ticket!", ephemeral: true });
     }
     
     if (interaction.customId === 'close_ticket') {
@@ -812,6 +928,18 @@ client.on('interactionCreate', async interaction => {
       await interaction.showModal(modal);
     }
     
+    // Rating buttons
+    if (interaction.customId.startsWith('rate_')) {
+      const stars = parseInt(interaction.customId.split('_')[1]);
+      const embed = createEmbed(
+        "⭐ Thank You!",
+        `You rated your ticket experience ${stars} star(s)!`,
+        config.colors.green
+      );
+      
+      await interaction.reply({ embeds: [embed], ephemeral: true });
+    }
+    
     // Application buttons
     if (interaction.customId.startsWith('start_app_')) {
       const appType = interaction.customId.slice(10);
@@ -824,7 +952,7 @@ client.on('interactionCreate', async interaction => {
       const application = activeApplications.get(userId);
       
       const embed = createEmbed(
-        "Application Accepted",
+        "✅ Application Accepted",
         `Your application has been accepted by ${interaction.user.tag}`,
         config.colors.green
       )
@@ -832,7 +960,7 @@ client.on('interactionCreate', async interaction => {
       .setFooter({ text: `From server: ${interaction.guild.name}` });
       
       await user.send({ embeds: [embed] }).catch(console.error);
-      await interaction.reply({ content: `Application accepted for <@${userId}>`, ephemeral: true });
+      await interaction.reply({ content: `✅ Application accepted for <@${userId}>`, ephemeral: true });
       interaction.message.delete().catch(console.error);
     }
     
@@ -841,7 +969,7 @@ client.on('interactionCreate', async interaction => {
       const user = await client.users.fetch(userId);
       
       const embed = createEmbed(
-        "Application Rejected",
+        "❌ Application Rejected",
         `Your application has been rejected by ${interaction.user.tag}`,
         config.colors.red
       )
@@ -849,7 +977,7 @@ client.on('interactionCreate', async interaction => {
       .setFooter({ text: `From server: ${interaction.guild.name}` });
       
       await user.send({ embeds: [embed] }).catch(console.error);
-      await interaction.reply({ content: `Application rejected for <@${userId}>`, ephemeral: true });
+      await interaction.reply({ content: `❌ Application rejected for <@${userId}>`, ephemeral: true });
       interaction.message.delete().catch(console.error);
     }
     
@@ -859,7 +987,7 @@ client.on('interactionCreate', async interaction => {
       
       const ticketNumber = Math.floor(Math.random() * 90000) + 10000;
       const ticketChannel = await interaction.guild.channels.create({
-        name: `app-${ticketNumber}`,
+        name: `app-${member.user.username}-${ticketNumber}`,
         type: ChannelType.GuildText,
         parent: config.ticketPanel.channelId ? interaction.guild.channels.cache.get(config.ticketPanel.channelId).parent : null,
         permissionOverwrites: [
@@ -879,7 +1007,7 @@ client.on('interactionCreate', async interaction => {
       });
       
       const embed = createEmbed(
-        "Application Follow-up",
+        "🎟️ Application Follow-up",
         `Ticket created for application follow-up with ${member.user.tag}`,
         config.colors.blue
       );
@@ -890,7 +1018,7 @@ client.on('interactionCreate', async interaction => {
       });
       
       await interaction.reply({
-        content: `Ticket created for application follow-up: ${ticketChannel}`,
+        content: `🎟️ Ticket created for application follow-up: ${ticketChannel}`,
         ephemeral: true
       });
       
@@ -903,9 +1031,9 @@ client.on('interactionCreate', async interaction => {
       const question = games.trivia.questions[0];
       
       if (question.options[answerIndex] === question.answer) {
-        await interaction.reply({ content: "Correct!", ephemeral: true });
+        await interaction.reply({ content: "✅ Correct!", ephemeral: true });
       } else {
-        await interaction.reply({ content: "Wrong! The correct answer is: " + question.answer, ephemeral: true });
+        await interaction.reply({ content: `❌ Wrong! The correct answer is: ${question.answer}`, ephemeral: true });
       }
     }
     
@@ -945,8 +1073,8 @@ client.on('interactionCreate', async interaction => {
       const feedback = interaction.fields.getTextInputValue('feedback') || "No feedback provided";
       
       const embed = createEmbed(
-        "Ticket Rating",
-        `Rating: ${rating}/5\nFeedback: ${feedback}`,
+        "⭐ Ticket Rating",
+        `**Rating:** ${rating}/5\n**Feedback:** ${feedback}`,
         config.colors.green
       );
       
@@ -969,7 +1097,7 @@ client.on('messageCreate', async message => {
   const nextQuestion = config.application.questions[application.currentQuestion];
   if (nextQuestion) {
     const dmEmbed = createEmbed(
-      `Application from ${application.guild.name}`,
+      `📝 Application from ${application.guild.name}`,
       nextQuestion
     )
     .setThumbnail(application.guild.iconURL())
@@ -992,13 +1120,13 @@ client.on('messageCreate', async message => {
   const number = games.guess[message.channel.id];
   
   if (guess === number) {
-    const embed = createEmbed("Correct!", `${message.author.tag} guessed the number ${number}!`, config.colors.green);
+    const embed = createEmbed("🎉 Correct!", `${message.author.tag} guessed the number ${number}!`, config.colors.green);
     message.channel.send({ embeds: [embed] });
     delete games.guess[message.channel.id];
   } else if (guess < number) {
-    message.reply("Too low!").then(msg => setTimeout(() => msg.delete(), 3000));
+    message.reply("⬆️ Too low!").then(msg => setTimeout(() => msg.delete(), 3000));
   } else {
-    message.reply("Too high!").then(msg => setTimeout(() => msg.delete(), 3000));
+    message.reply("⬇️ Too high!").then(msg => setTimeout(() => msg.delete(), 3000));
   }
 });
 
