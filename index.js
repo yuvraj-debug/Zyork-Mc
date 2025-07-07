@@ -1541,4 +1541,4 @@ function startInactivityTimer(channelId) {
 // ----------------------
 // 🚀 START THE BOT
 // ----------------------
-client.login(process.env.DISCORD_TOKEN);
+client.login('MTM4MzY1OTM2ODI3NjQzMDk0OQ.GTBR_g.eTA0aTq4qfPLWv1eUrnWUY5gL4NjKrvJppdfN4');
