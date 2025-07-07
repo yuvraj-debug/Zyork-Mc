@@ -547,7 +547,7 @@ async function clearMessages(message, args) {
     }
 
     const amount = parseInt(args[0]);
-    if (isNaN(amount) return sendError(message, 'Please provide a valid number of messages to delete.');
+    if (isNaN(amount)) return sendError(message, 'Please provide a valid number of messages to delete.');
     if (amount < 1 || amount > 100) return sendError(message, 'You can only delete between 1 and 100 messages at once.');
 
     try {
@@ -1195,6 +1195,7 @@ async function handleApplicationStart(interaction) {
                         .setStyle(TextInputStyle.Paragraph)
                         .setRequired(true)
                 )
+            )
         );
 
     // Store application data for the modal submit
