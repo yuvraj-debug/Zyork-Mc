@@ -1,15 +1,39 @@
 require('dotenv').config();
-const fs = require('fs');
+const { 
+    Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, 
+    ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, 
+    PermissionFlagsBits, Colors, ChannelType, TextInputStyle,
+    ModalBuilder, TextInputBuilder, AttachmentBuilder
+} = require('discord.js');
 const express = require('express');
-const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, PermissionFlagsBits, ChannelType, Collection } = require('discord.js');
 const app = express();
-const port = 3000;
+const PORT = process.env.PORT || 3000;
 
-// Keep alive for Render
-app.get('/', (req, res) => res.send('Discord Bot is alive!'));
-app.listen(port, () => console.log(`Keep-alive server running on port ${port}`));
+// In-memory data storage
+const data = {
+    tickets: {
+        message: null,
+        options: [],
+        category: null,
+        viewerRole: null,
+        activeTickets: new Map(),
+        logsChannel: null
+    },
+    applications: {
+        message: null,
+        roles: [],
+        questions: [],
+        cooldowns: new Map(),
+        logsChannel: null
+    },
+    moderation: {
+        warnings: new Map(),
+        blacklistedWords: ['badword1', 'badword2', 'example'],
+        mutedUsers: new Map()
+    }
+};
 
-// Bot setup
+// Initialize Discord client
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -20,175 +44,1424 @@ const client = new Client({
     ]
 });
 
-// In-memory storage
-const settings = {
-    ticketPanel: {
-        message: null,
-        options: [],
-        channelId: null,
-        viewerRole: null
-    },
-    applications: {
-        message: null,
-        options: [],
-        questions: [],
-        channelId: null,
-        cooldowns: new Map()
-    },
-    warnings: new Map(),
-    blacklistedWords: ['badword1', 'badword2', 'example'],
-    modLogChannel: null
-};
+// Keep alive server
+app.get('/', (req, res) => res.send('Bot is alive!'));
+app.listen(PORT, () => console.log(`Keep-alive server running on port ${PORT}`));
+require('./keep_alive.js');
 
-// Constants
-const COLORS = {
-    DEFAULT: 0x5865F2,
-    SUCCESS: 0x57F287,
-    ERROR: 0xED4245,
-    WARNING: 0xFEE75C,
-    INFO: 0x5865F2
-};
+// Bot ready event
+client.on('ready', () => {
+    console.log(`Logged in as ${client.user.tag}!`);
+    client.user.setActivity('!help for commands');
+});
 
-const EMOJIS = {
-    TICKET: '📩',
-    MOD: '🛡️',
-    UTIL: '💬',
-    FUN: '🎮',
-    SUCCESS: '✅',
-    ERROR: '❌',
-    WARNING: '⚠️',
-    INFO: 'ℹ️',
-    LOCK: '🔒',
-    UNLOCK: '🔓',
-    CLOSE: '🛑',
-    CLAIM: '🔐',
-    TRANSCRIPT: '📄'
-};
+// Message handler
+client.on('messageCreate', async message => {
+    if (message.author.bot) return;
+    if (!message.content.startsWith('!')) return;
 
-// Helper functions
-function createEmbed(title, description, color = COLORS.DEFAULT, fields = [], footer = null) {
+    const args = message.content.slice(1).trim().split(/ +/);
+    const command = args.shift().toLowerCase();
+
+    try {
+        // Help command
+        if (command === 'help') await helpCommand(message);
+
+        // Ticket system
+        else if (command === 'ticket') await ticketCommand(message, args);
+        else if (command === 'setoptions') await setTicketOptions(message, args);
+        else if (command === 'deployticketpanel') await deployTicketPanel(message);
+        else if (command === 'setviewer') await setViewerRole(message, args);
+
+        // Application system
+        else if (command === 'app') await appCommand(message, args);
+        else if (command === 'addoptions') await addAppOptions(message, args);
+        else if (command === 'deployapp') await deployAppPanel(message);
+        else if (command.startsWith('ques')) await setQuestion(message, command, args);
+
+        // Moderation
+        else if (command === 'ban') await banUser(message, args);
+        else if (command === 'kick') await kickUser(message, args);
+        else if (command === 'mute') await muteUser(message, args);
+        else if (command === 'unmute') await unmuteUser(message, args);
+        else if (command === 'warn') await warnUser(message, args);
+        else if (command === 'warnings') await showWarnings(message, args);
+        else if (command === 'clear') await clearMessages(message, args);
+        else if (command === 'lock') await lockChannel(message);
+        else if (command === 'unlock') await unlockChannel(message);
+
+        // Utility
+        else if (command === 'dm') await dmRole(message, args);
+        else if (command === 'msg') await sendAsBot(message, args);
+        else if (command === 'embed') await sendEmbed(message, args);
+        else if (command === 'poll') await createPoll(message, args);
+        else if (command === 'serverinfo') await serverInfo(message);
+        else if (command === 'userinfo') await userInfo(message, args);
+
+        // Fun
+        else if (command === 'rps') await rockPaperScissors(message);
+        else if (command === 'guess') await guessNumber(message);
+        else if (command === 'math') await mathChallenge(message);
+        else if (command === 'trivia') await triviaGame(message);
+        else if (command === 'type') await typeChallenge(message);
+
+    } catch (error) {
+        console.error(error);
+        const embed = new EmbedBuilder()
+            .setColor(Colors.Red)
+            .setTitle('❌ Error')
+            .setDescription('An error occurred while executing that command.');
+        await message.reply({ embeds: [embed] });
+    }
+});
+
+// Interaction handler (for buttons, dropdowns)
+client.on('interactionCreate', async interaction => {
+    if (!interaction.isButton() && !interaction.isStringSelectMenu() && !interaction.isModalSubmit()) return;
+
+    try {
+        // Ticket system interactions
+        if (interaction.customId === 'create_ticket') await handleTicketCreation(interaction);
+        else if (interaction.customId.startsWith('ticket_')) await handleTicketAction(interaction);
+
+        // Application system interactions
+        else if (interaction.customId.startsWith('apply_')) await handleApplicationStart(interaction);
+        else if (interaction.customId === 'application_modal') await handleApplicationSubmit(interaction);
+        else if (interaction.customId.startsWith('app_response_')) await handleApplicationResponse(interaction);
+
+        // Fun game interactions
+        else if (interaction.customId.startsWith('rps_')) await handleRPSChoice(interaction);
+        else if (interaction.customId === 'guess_submit') await handleGuessSubmit(interaction);
+        else if (interaction.customId === 'math_submit') await handleMathSubmit(interaction);
+        else if (interaction.customId === 'trivia_submit') await handleTriviaSubmit(interaction);
+        else if (interaction.customId === 'type_submit') await handleTypeSubmit(interaction);
+
+    } catch (error) {
+        console.error(error);
+        const embed = new EmbedBuilder()
+            .setColor(Colors.Red)
+            .setTitle('❌ Error')
+            .setDescription('An error occurred while processing your interaction.');
+        if (interaction.replied || interaction.deferred) {
+            await interaction.followUp({ embeds: [embed], ephemeral: true });
+        } else {
+            await interaction.reply({ embeds: [embed], ephemeral: true });
+        }
+    }
+});
+
+// ----------------------
+// 🎯 COMMAND FUNCTIONS
+// ----------------------
+
+// ✅ BOT BASICS
+async function helpCommand(message) {
     const embed = new EmbedBuilder()
-        .setTitle(title)
-        .setDescription(description)
-        .setColor(color)
-        .setTimestamp();
+        .setColor(Colors.Blue)
+        .setTitle('📚 Help Menu')
+        .setDescription('Here are all available commands:')
+        .addFields(
+            { name: '🎫 Ticket System', value: '`!ticket msg <message>` - Set ticket panel\n`!setoptions <options>` - Set ticket options\n`!deployticketpanel` - Deploy ticket panel\n`!setviewer @role` - Set ticket viewer role' },
+            { name: '📝 Application System', value: '`!app msg <message>` - Set app panel\n`!addoptions <roles>` - Add role options\n`!deployapp` - Deploy app panel\n`!ques1-10 <question>` - Set application questions' },
+            { name: '🛡️ Moderation', value: '`!ban @user [reason]` - Ban user\n`!kick @user [reason]` - Kick user\n`!mute @user <time>` - Mute user\n`!warn @user [reason]` - Warn user\n`!clear <amount>` - Clear messages\n`!lock`/`!unlock` - Lock channel' },
+            { name: '💬 Utility', value: '`!dm @role <message>` - DM role members\n`!embed <color> <message>` - Send embed\n`!poll <question>` - Create poll\n`!serverinfo` - Server info\n`!userinfo @user` - User info' },
+            { name: '🎮 Fun', value: '`!rps` - Rock Paper Scissors\n`!guess` - Guess the number\n`!math` - Math challenge\n`!trivia` - Trivia question\n`!type` - Typing challenge' }
+        )
+        .setFooter({ text: `Requested by ${message.author.tag}`, iconURL: message.author.displayAvatarURL() });
 
-    if (fields.length > 0) embed.addFields(fields);
-    if (footer) embed.setFooter({ text: footer });
-
-    return embed;
+    await message.reply({ embeds: [embed] });
 }
 
-function createActionRow(components) {
-    return new ActionRowBuilder().addComponents(components);
-}
-
-function createButton(customId, label, style, emoji = null, disabled = false) {
-    const button = new ButtonBuilder()
-        .setCustomId(customId)
-        .setLabel(label)
-        .setStyle(style)
-        .setDisabled(disabled);
-
-    if (emoji) button.setEmoji(emoji);
-    return button;
-}
-
-function createSelectMenu(customId, placeholder, options, min = 1, max = 1) {
-    const select = new StringSelectMenuBuilder()
-        .setCustomId(customId)
-        .setPlaceholder(placeholder)
-        .setMinValues(min)
-        .setMaxValues(max);
-
-    options.forEach(option => {
-        select.addOptions(
-            new StringSelectMenuOptionBuilder()
-                .setLabel(option.label)
-                .setValue(option.value)
-                .setDescription(option.description || '')
-                .setEmoji(option.emoji || '')
-        );
-    });
-
-    return select;
-}
-
-function errorEmbed(description) {
-    return createEmbed(`${EMOJIS.ERROR} Error`, description, COLORS.ERROR);
-}
-
-function successEmbed(description) {
-    return createEmbed(`${EMOJIS.SUCCESS} Success`, description, COLORS.SUCCESS);
-}
-
-// Moderation functions
-async function banUser(message, user, reason = 'No reason provided') {
-    if (!message.member.permissions.has(PermissionFlagsBits.BanMembers)) {
-        return message.channel.send({ embeds: [errorEmbed('You need ban permissions to use this command!')] });
+// 🎫 TICKET SYSTEM
+async function ticketCommand(message, args) {
+    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+        return sendError(message, 'You need administrator permissions to use this command.');
     }
 
+    const msg = args.join(' ');
+    if (!msg) return sendError(message, 'Please provide a message for the ticket panel.');
+
+    data.tickets.message = msg;
+    data.tickets.logsChannel = message.channel.id;
+
+    const embed = new EmbedBuilder()
+        .setColor(Colors.Green)
+        .setTitle('✅ Success')
+        .setDescription('Ticket panel message set successfully!')
+        .addFields(
+            { name: 'Next Steps', value: '1. Use `!setoptions` to set ticket options\n2. Use `!deployticketpanel` to deploy the panel' }
+        );
+    
+    await message.reply({ embeds: [embed] });
+    setTimeout(() => message.delete(), 5000);
+}
+
+async function setTicketOptions(message, args) {
+    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+        return sendError(message, 'You need administrator permissions to use this command.');
+    }
+
+    if (!args.length) return sendError(message, 'Please provide at least one option.');
+
+    data.tickets.options = args;
+    const embed = new EmbedBuilder()
+        .setColor(Colors.Green)
+        .setTitle('✅ Success')
+        .setDescription(`Ticket options set to: ${args.join(', ')}`);
+    
+    await message.reply({ embeds: [embed] });
+    setTimeout(() => message.delete(), 5000);
+}
+
+async function deployTicketPanel(message) {
+    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+        return sendError(message, 'You need administrator permissions to use this command.');
+    }
+
+    if (!data.tickets.message || !data.tickets.options.length) {
+        return sendError(message, 'Please set the ticket message and options first.');
+    }
+
+    const selectMenu = new StringSelectMenuBuilder()
+        .setCustomId('create_ticket')
+        .setPlaceholder('Select a ticket type')
+        .addOptions(data.tickets.options.map(option => ({
+            label: option,
+            value: option.toLowerCase()
+        })));
+
+    const row = new ActionRowBuilder().addComponents(selectMenu);
+
+    const embed = new EmbedBuilder()
+        .setColor(Colors.Blurple)
+        .setTitle('🎫 Create a Ticket')
+        .setDescription(data.tickets.message)
+        .setFooter({ text: 'Select an option from the dropdown below' });
+
+    await message.channel.send({ embeds: [embed], components: [row] });
+    await message.delete();
+}
+
+async function setViewerRole(message, args) {
+    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+        return sendError(message, 'You need administrator permissions to use this command.');
+    }
+
+    const role = message.mentions.roles.first();
+    if (!role) return sendError(message, 'Please mention a valid role.');
+
+    data.tickets.viewerRole = role.id;
+    const embed = new EmbedBuilder()
+        .setColor(Colors.Green)
+        .setTitle('✅ Success')
+        .setDescription(`Default viewer role set to ${role.name}`);
+    
+    await message.reply({ embeds: [embed] });
+    setTimeout(() => message.delete(), 5000);
+}
+
+// 📝 APPLICATION SYSTEM
+async function appCommand(message, args) {
+    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+        return sendError(message, 'You need administrator permissions to use this command.');
+    }
+
+    const msg = args.join(' ');
+    if (!msg) return sendError(message, 'Please provide a message for the application panel.');
+
+    data.applications.message = msg;
+    data.applications.logsChannel = message.channel.id;
+
+    const embed = new EmbedBuilder()
+        .setColor(Colors.Green)
+        .setTitle('✅ Success')
+        .setDescription('Application panel message set successfully!')
+        .addFields(
+            { name: 'Next Steps', value: '1. Use `!addoptions` to set role options\n2. Use `!ques1-10` to set questions\n3. Use `!deployapp` to deploy the panel' }
+        );
+    
+    await message.reply({ embeds: [embed] });
+    setTimeout(() => message.delete(), 5000);
+}
+
+async function addAppOptions(message, args) {
+    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+        return sendError(message, 'You need administrator permissions to use this command.');
+    }
+
+    if (!args.length) return sendError(message, 'Please provide at least one role.');
+
+    const roles = message.mentions.roles.map(role => ({
+        id: role.id,
+        name: role.name
+    }));
+
+    if (!roles.length) return sendError(message, 'Please mention valid roles.');
+
+    data.applications.roles = roles;
+    const embed = new EmbedBuilder()
+        .setColor(Colors.Green)
+        .setTitle('✅ Success')
+        .setDescription(`Application options set to: ${roles.map(r => r.name).join(', ')}`);
+    
+    await message.reply({ embeds: [embed] });
+    setTimeout(() => message.delete(), 5000);
+}
+
+async function deployAppPanel(message) {
+    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+        return sendError(message, 'You need administrator permissions to use this command.');
+    }
+
+    if (!data.applications.message || !data.applications.roles.length || !data.applications.questions.length) {
+        return sendError(message, 'Please set the application message, role options, and questions first.');
+    }
+
+    const buttons = data.applications.roles.map(role => 
+        new ButtonBuilder()
+            .setCustomId(`apply_${role.id}`)
+            .setLabel(role.name)
+            .setStyle(ButtonStyle.Primary)
+    );
+
+    const rows = [];
+    for (let i = 0; i < buttons.length; i += 5) {
+        rows.push(new ActionRowBuilder().addComponents(buttons.slice(i, i + 5)));
+    }
+
+    const embed = new EmbedBuilder()
+        .setColor(Colors.Gold)
+        .setTitle('📝 Application Panel')
+        .setDescription(data.applications.message)
+        .setFooter({ text: 'Click a button below to apply' });
+
+    await message.channel.send({ embeds: [embed], components: rows });
+    await message.delete();
+}
+
+async function setQuestion(message, command, args) {
+    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+        return sendError(message, 'You need administrator permissions to use this command.');
+    }
+
+    const questionNumber = parseInt(command.replace('ques', ''));
+    if (isNaN(questionNumber) || questionNumber < 1 || questionNumber > 10) {
+        return sendError(message, 'Question number must be between 1 and 10 (use !ques1-10)');
+    }
+
+    const question = args.join(' ');
+    if (!question) return sendError(message, 'Please provide a question.');
+
+    data.applications.questions[questionNumber - 1] = question;
+    const embed = new EmbedBuilder()
+        .setColor(Colors.Green)
+        .setTitle('✅ Success')
+        .setDescription(`Question ${questionNumber} set to: ${question}`);
+    
+    await message.reply({ embeds: [embed] });
+    setTimeout(() => message.delete(), 5000);
+}
+
+// 🛡️ MODERATION COMMANDS
+async function banUser(message, args) {
+    if (!message.member.permissions.has(PermissionFlagsBits.BanMembers)) {
+        return sendError(message, 'You need ban members permissions to use this command.');
+    }
+
+    const user = message.mentions.users.first();
+    if (!user) return sendError(message, 'Please mention a user to ban.');
+
+    const reason = args.slice(1).join(' ') || 'No reason provided';
+    
     try {
         await message.guild.members.ban(user, { reason });
-        const embed = createEmbed(
-            `${EMOJIS.MOD} User Banned`,
-            `${user.tag} has been banned by ${message.author.tag}`,
-            COLORS.SUCCESS,
-            [{ name: 'Reason', value: reason }]
-        );
-        message.channel.send({ embeds: [embed] });
-        logModAction(`User Banned: ${user.tag} by ${message.author.tag} - Reason: ${reason}`);
-    } catch (err) {
-        message.channel.send({ embeds: [errorEmbed(`Failed to ban user: ${err.message}`)] });
+        const embed = new EmbedBuilder()
+            .setColor(Colors.Red)
+            .setTitle('🔨 User Banned')
+            .setDescription(`${user.tag} has been banned from the server.`)
+            .addFields(
+                { name: 'Reason', value: reason },
+                { name: 'Moderator', value: message.author.tag }
+            );
+        
+        await message.reply({ embeds: [embed] });
+    } catch (error) {
+        sendError(message, 'Failed to ban user. Check bot permissions and role hierarchy.');
     }
 }
 
-async function kickUser(message, user, reason = 'No reason provided') {
+async function kickUser(message, args) {
     if (!message.member.permissions.has(PermissionFlagsBits.KickMembers)) {
-        return message.channel.send({ embeds: [errorEmbed('You need kick permissions to use this command!')] });
+        return sendError(message, 'You need kick members permissions to use this command.');
     }
 
+    const user = message.mentions.users.first();
+    if (!user) return sendError(message, 'Please mention a user to kick.');
+
+    const reason = args.slice(1).join(' ') || 'No reason provided';
+    
     try {
         await message.guild.members.kick(user, { reason });
-        const embed = createEmbed(
-            `${EMOJIS.MOD} User Kicked`,
-            `${user.tag} has been kicked by ${message.author.tag}`,
-            COLORS.SUCCESS,
-            [{ name: 'Reason', value: reason }]
-        );
-        message.channel.send({ embeds: [embed] });
-        logModAction(`User Kicked: ${user.tag} by ${message.author.tag} - Reason: ${reason}`);
-    } catch (err) {
-        message.channel.send({ embeds: [errorEmbed(`Failed to kick user: ${err.message}`)] });
+        const embed = new EmbedBuilder()
+            .setColor(Colors.Orange)
+            .setTitle('👢 User Kicked')
+            .setDescription(`${user.tag} has been kicked from the server.`)
+            .addFields(
+                { name: 'Reason', value: reason },
+                { name: 'Moderator', value: message.author.tag }
+            );
+        
+        await message.reply({ embeds: [embed] });
+    } catch (error) {
+        sendError(message, 'Failed to kick user. Check bot permissions and role hierarchy.');
     }
 }
 
-async function muteUser(message, user, duration) {
+async function muteUser(message, args) {
     if (!message.member.permissions.has(PermissionFlagsBits.ModerateMembers)) {
-        return message.channel.send({ embeds: [errorEmbed('You need timeout permissions to use this command!')] });
+        return sendError(message, 'You need moderate members permissions to use this command.');
     }
 
+    const user = message.mentions.users.first();
+    if (!user) return sendError(message, 'Please mention a user to mute.');
+
+    const duration = args[1];
+    if (!duration) return sendError(message, 'Please provide a duration (e.g., 1h, 30m)');
+
     const time = parseDuration(duration);
-    if (!time) {
-        return message.channel.send({ embeds: [errorEmbed('Invalid duration format. Use 1h, 30m, 2d etc.')] });
+    if (!time) return sendError(message, 'Invalid duration format. Use formats like 1h, 30m, 2d');
+
+    const reason = args.slice(2).join(' ') || 'No reason provided';
+    
+    try {
+        const member = await message.guild.members.fetch(user.id);
+        await member.timeout(time, reason);
+        
+        data.moderation.mutedUsers.set(user.id, Date.now() + time);
+        
+        const embed = new EmbedBuilder()
+            .setColor(Colors.DarkOrange)
+            .setTitle('🔇 User Muted')
+            .setDescription(`${user.tag} has been muted for ${formatDuration(time)}.`)
+            .addFields(
+                { name: 'Reason', value: reason },
+                { name: 'Moderator', value: message.author.tag }
+            );
+        
+        await message.reply({ embeds: [embed] });
+    } catch (error) {
+        sendError(message, 'Failed to mute user. Check bot permissions and role hierarchy.');
+    }
+}
+
+async function unmuteUser(message, args) {
+    if (!message.member.permissions.has(PermissionFlagsBits.ModerateMembers)) {
+        return sendError(message, 'You need moderate members permissions to use this command.');
+    }
+
+    const user = message.mentions.users.first();
+    if (!user) return sendError(message, 'Please mention a user to unmute.');
+
+    try {
+        const member = await message.guild.members.fetch(user.id);
+        await member.timeout(null);
+        
+        data.moderation.mutedUsers.delete(user.id);
+        
+        const embed = new EmbedBuilder()
+            .setColor(Colors.Green)
+            .setTitle('🔊 User Unmuted')
+            .setDescription(`${user.tag} has been unmuted.`)
+            .addFields(
+                { name: 'Moderator', value: message.author.tag }
+            );
+        
+        await message.reply({ embeds: [embed] });
+    } catch (error) {
+        sendError(message, 'Failed to unmute user. Check bot permissions and role hierarchy.');
+    }
+}
+
+async function warnUser(message, args) {
+    if (!message.member.permissions.has(PermissionFlagsBits.ModerateMembers)) {
+        return sendError(message, 'You need moderate members permissions to use this command.');
+    }
+
+    const user = message.mentions.users.first();
+    if (!user) return sendError(message, 'Please mention a user to warn.');
+
+    const reason = args.slice(1).join(' ') || 'No reason provided';
+    
+    if (!data.moderation.warnings.has(user.id)) {
+        data.moderation.warnings.set(user.id, []);
+    }
+    
+    data.moderation.warnings.get(user.id).push({
+        reason,
+        moderator: message.author.tag,
+        timestamp: Date.now()
+    });
+    
+    const embed = new EmbedBuilder()
+        .setColor(Colors.Yellow)
+        .setTitle('⚠️ User Warned')
+        .setDescription(`${user.tag} has been warned.`)
+        .addFields(
+            { name: 'Reason', value: reason },
+            { name: 'Moderator', value: message.author.tag },
+            { name: 'Total Warnings', value: data.moderation.warnings.get(user.id).length.toString() }
+        );
+    
+    await message.reply({ embeds: [embed] });
+}
+
+async function showWarnings(message, args) {
+    if (!message.member.permissions.has(PermissionFlagsBits.ModerateMembers)) {
+        return sendError(message, 'You need moderate members permissions to use this command.');
+    }
+
+    const user = message.mentions.users.first();
+    if (!user) return sendError(message, 'Please mention a user to check warnings for.');
+
+    const warnings = data.moderation.warnings.get(user.id) || [];
+    
+    const embed = new EmbedBuilder()
+        .setColor(Colors.Yellow)
+        .setTitle(`⚠️ Warnings for ${user.tag}`)
+        .setDescription(warnings.length ? `Total warnings: ${warnings.length}` : 'No warnings found.');
+    
+    if (warnings.length) {
+        embed.addFields(warnings.map((warn, i) => ({
+            name: `Warning #${i + 1}`,
+            value: `Reason: ${warn.reason}\nModerator: ${warn.moderator}\nDate: <t:${Math.floor(warn.timestamp / 1000)}:f>`,
+            inline: false
+        })));
+    }
+    
+    await message.reply({ embeds: [embed] });
+}
+
+async function clearMessages(message, args) {
+    if (!message.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
+        return sendError(message, 'You need manage messages permissions to use this command.');
+    }
+
+    const amount = parseInt(args[0]);
+    if (isNaN(amount) return sendError(message, 'Please provide a valid number of messages to delete.');
+    if (amount < 1 || amount > 100) return sendError(message, 'You can only delete between 1 and 100 messages at once.');
+
+    try {
+        await message.channel.bulkDelete(amount + 1); // +1 to include the command message
+        const embed = new EmbedBuilder()
+            .setColor(Colors.Green)
+            .setDescription(`✅ Deleted ${amount} messages.`);
+        
+        const reply = await message.channel.send({ embeds: [embed] });
+        setTimeout(() => reply.delete(), 3000);
+    } catch (error) {
+        sendError(message, 'Failed to delete messages. Messages may be too old or missing permissions.');
+    }
+}
+
+async function lockChannel(message) {
+    if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
+        return sendError(message, 'You need manage channels permissions to use this command.');
     }
 
     try {
-        await user.timeout(time, 'Muted by command');
-        const embed = createEmbed(
-            `${EMOJIS.MOD} User Muted`,
-            `${user.tag} has been muted by ${message.author.tag}`,
-            COLORS.SUCCESS,
-            [
-                { name: 'Duration', value: duration },
-                { name: 'Expires', value: `<t:${Math.floor((Date.now() + time) / 1000)}:R>` }
-            ]
-        );
-        message.channel.send({ embeds: [embed] });
-        logModAction(`User Muted: ${user.tag} by ${message.author.tag} - Duration: ${duration}`);
-    } catch (err) {
-        message.channel.send({ embeds: [errorEmbed(`Failed to mute user: ${err.message}`)] });
+        await message.channel.permissionOverwrites.edit(message.guild.roles.everyone, {
+            SendMessages: false
+        });
+        
+        const embed = new EmbedBuilder()
+            .setColor(Colors.Red)
+            .setDescription('🔒 Channel has been locked.');
+        
+        await message.reply({ embeds: [embed] });
+    } catch (error) {
+        sendError(message, 'Failed to lock channel. Check bot permissions.');
     }
+}
+
+async function unlockChannel(message) {
+    if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
+        return sendError(message, 'You need manage channels permissions to use this command.');
+    }
+
+    try {
+        await message.channel.permissionOverwrites.edit(message.guild.roles.everyone, {
+            SendMessages: null
+        });
+        
+        const embed = new EmbedBuilder()
+            .setColor(Colors.Green)
+            .setDescription('🔓 Channel has been unlocked.');
+        
+        await message.reply({ embeds: [embed] });
+    } catch (error) {
+        sendError(message, 'Failed to unlock channel. Check bot permissions.');
+    }
+}
+
+// 💬 UTILITY COMMANDS
+async function dmRole(message, args) {
+    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+        return sendError(message, 'You need administrator permissions to use this command.');
+    }
+
+    const role = message.mentions.roles.first();
+    if (!role) return sendError(message, 'Please mention a role to DM.');
+
+    const content = args.slice(1).join(' ');
+    if (!content) return sendError(message, 'Please provide a message to send.');
+
+    const members = (await message.guild.members.fetch()).filter(m => m.roles.cache.has(role.id));
+    if (members.size === 0) return sendError(message, 'No members found with that role.');
+
+    const embed = new EmbedBuilder()
+        .setColor(Colors.Blurple)
+        .setTitle(`📩 Message from ${message.guild.name}`)
+        .setDescription(content)
+        .setFooter({ text: 'This is an automated message' });
+
+    let success = 0, failed = 0;
+    for (const member of members.values()) {
+        try {
+            await member.send({ embeds: [embed] });
+            success++;
+        } catch {
+            failed++;
+        }
+    }
+
+    const resultEmbed = new EmbedBuilder()
+        .setColor(Colors.Green)
+        .setTitle('✅ DM Sent')
+        .setDescription(`Successfully sent to ${success} members, failed for ${failed} members.`);
+    
+    await message.reply({ embeds: [resultEmbed] });
+}
+
+async function sendAsBot(message, args) {
+    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+        return sendError(message, 'You need administrator permissions to use this command.');
+    }
+
+    const content = args.join(' ');
+    if (!content) return sendError(message, 'Please provide a message to send.');
+
+    await message.channel.send(content);
+    await message.delete();
+}
+
+async function sendEmbed(message, args) {
+    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+        return sendError(message, 'You need administrator permissions to use this command.');
+    }
+
+    const color = args.shift();
+    if (!color) return sendError(message, 'Please provide a color (e.g., red, #FF0000, 0xFF0000)');
+
+    const content = args.join(' ');
+    if (!content) return sendError(message, 'Please provide embed content.');
+
+    let embedColor;
+    if (color.startsWith('#')) {
+        embedColor = parseInt(color.slice(1), 16);
+    } else if (color.startsWith('0x')) {
+        embedColor = parseInt(color.slice(2), 16);
+    } else if (Colors[color.toUpperCase()]) {
+        embedColor = Colors[color.toUpperCase()];
+    } else {
+        return sendError(message, 'Invalid color format. Use color name, hex (#FF0000), or hex (0xFF0000)');
+    }
+
+    const embed = new EmbedBuilder()
+        .setColor(embedColor)
+        .setDescription(content);
+    
+    await message.channel.send({ embeds: [embed] });
+    await message.delete();
+}
+
+async function createPoll(message, args) {
+    const question = args.join(' ');
+    if (!question) return sendError(message, 'Please provide a poll question.');
+
+    const embed = new EmbedBuilder()
+        .setColor(Colors.Blurple)
+        .setTitle('📊 Poll')
+        .setDescription(question)
+        .setFooter({ text: `Poll created by ${message.author.tag}` });
+
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId('poll_yes')
+            .setLabel('👍 Yes')
+            .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+            .setCustomId('poll_no')
+            .setLabel('👎 No')
+            .setStyle(ButtonStyle.Danger)
+    );
+
+    await message.channel.send({ embeds: [embed], components: [row] });
+    await message.delete();
+}
+
+async function serverInfo(message) {
+    const guild = message.guild;
+    
+    const embed = new EmbedBuilder()
+        .setColor(Colors.Blurple)
+        .setTitle(`ℹ️ Server Info - ${guild.name}`)
+        .setThumbnail(guild.iconURL())
+        .addFields(
+            { name: '👑 Owner', value: (await guild.fetchOwner()).user.tag, inline: true },
+            { name: '🆔 ID', value: guild.id, inline: true },
+            { name: '📅 Created', value: `<t:${Math.floor(guild.createdTimestamp / 1000)}:f>`, inline: true },
+            { name: '👥 Members', value: guild.memberCount.toString(), inline: true },
+            { name: '💬 Channels', value: guild.channels.cache.size.toString(), inline: true },
+            { name: '🎭 Roles', value: guild.roles.cache.size.toString(), inline: true },
+            { name: '🚀 Boost Level', value: `Level ${guild.premiumTier} (${guild.premiumSubscriptionCount} boosts)`, inline: true }
+        );
+    
+    await message.reply({ embeds: [embed] });
+}
+
+async function userInfo(message, args) {
+    const user = message.mentions.users.first() || message.author;
+    const member = message.guild.members.cache.get(user.id);
+    
+    if (!member) return sendError(message, 'User not found in this server.');
+
+    const embed = new EmbedBuilder()
+        .setColor(Colors.Blurple)
+        .setTitle(`👤 User Info - ${user.tag}`)
+        .setThumbnail(user.displayAvatarURL())
+        .addFields(
+            { name: '🆔 ID', value: user.id, inline: true },
+            { name: '📅 Joined Server', value: `<t:${Math.floor(member.joinedTimestamp / 1000)}:f>`, inline: true },
+            { name: '📅 Account Created', value: `<t:${Math.floor(user.createdTimestamp / 1000)}:f>`, inline: true },
+            { name: '🎭 Roles', value: member.roles.cache.size.toString(), inline: true },
+            { name: '🚀 Boosting', value: member.premiumSince ? `<t:${Math.floor(member.premiumSinceTimestamp / 1000)}:f>` : 'Not boosting', inline: true },
+            { name: '📛 Nickname', value: member.nickname || 'None', inline: true }
+        );
+    
+    await message.reply({ embeds: [embed] });
+}
+
+// 🎮 FUN COMMANDS
+async function rockPaperScissors(message) {
+    const embed = new EmbedBuilder()
+        .setColor(Colors.Blurple)
+        .setTitle('🪨 Rock, 📄 Paper, ✂️ Scissors')
+        .setDescription('Choose your move!');
+
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId('rps_rock')
+            .setLabel('🪨 Rock')
+            .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+            .setCustomId('rps_paper')
+            .setLabel('📄 Paper')
+            .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+            .setCustomId('rps_scissors')
+            .setLabel('✂️ Scissors')
+            .setStyle(ButtonStyle.Primary)
+    );
+
+    await message.reply({ embeds: [embed], components: [row] });
+}
+
+async function guessNumber(message) {
+    const number = Math.floor(Math.random() * 10) + 1;
+    data.guessNumber = number; // Store the number for the interaction handler
+
+    const embed = new EmbedBuilder()
+        .setColor(Colors.Gold)
+        .setTitle('🔢 Guess the Number')
+        .setDescription('I\'m thinking of a number between 1 and 10. Can you guess it?');
+
+    const modal = new ModalBuilder()
+        .setCustomId('guess_submit')
+        .setTitle('Guess the Number')
+        .addComponents(
+            new ActionRowBuilder().addComponents(
+                new TextInputBuilder()
+                    .setCustomId('guess_input')
+                    .setLabel('Your guess (1-10)')
+                    .setStyle(TextInputStyle.Short)
+                    .setRequired(true)
+                    .setMinLength(1)
+                    .setMaxLength(2)
+            )
+        );
+
+    await message.showModal(modal);
+    await message.reply({ embeds: [embed] });
+}
+
+async function mathChallenge(message) {
+    const num1 = Math.floor(Math.random() * 10) + 1;
+    const num2 = Math.floor(Math.random() * 10) + 1;
+    const operators = ['+', '-', '*'];
+    const operator = operators[Math.floor(Math.random() * operators.length)];
+    
+    let answer;
+    switch (operator) {
+        case '+': answer = num1 + num2; break;
+        case '-': answer = num1 - num2; break;
+        case '*': answer = num1 * num2; break;
+    }
+    
+    data.mathAnswer = answer; // Store the answer for the interaction handler
+
+    const embed = new EmbedBuilder()
+        .setColor(Colors.Gold)
+        .setTitle('🧮 Math Challenge')
+        .setDescription(`What is ${num1} ${operator} ${num2}?`);
+
+    const modal = new ModalBuilder()
+        .setCustomId('math_submit')
+        .setTitle('Math Challenge')
+        .addComponents(
+            new ActionRowBuilder().addComponents(
+                new TextInputBuilder()
+                    .setCustomId('math_input')
+                    .setLabel('Your answer')
+                    .setStyle(TextInputStyle.Short)
+                    .setRequired(true)
+                    .setMinLength(1)
+                    .setMaxLength(4)
+            )
+        );
+
+    await message.showModal(modal);
+    await message.reply({ embeds: [embed] });
+}
+
+async function triviaGame(message) {
+    const questions = [
+        { question: 'What is the capital of France?', answer: 'Paris' },
+        { question: 'How many continents are there?', answer: '7' },
+        { question: 'What is the largest planet in our solar system?', answer: 'Jupiter' },
+        { question: 'Who painted the Mona Lisa?', answer: 'Leonardo da Vinci' },
+        { question: 'What is the chemical symbol for gold?', answer: 'Au' }
+    ];
+    
+    const randomQuestion = questions[Math.floor(Math.random() * questions.length)];
+    data.triviaAnswer = randomQuestion.answer.toLowerCase();
+
+    const embed = new EmbedBuilder()
+        .setColor(Colors.Gold)
+        .setTitle('❓ Trivia Question')
+        .setDescription(randomQuestion.question);
+
+    const modal = new ModalBuilder()
+        .setCustomId('trivia_submit')
+        .setTitle('Trivia Question')
+        .addComponents(
+            new ActionRowBuilder().addComponents(
+                new TextInputBuilder()
+                    .setCustomId('trivia_input')
+                    .setLabel('Your answer')
+                    .setStyle(TextInputStyle.Short)
+                    .setRequired(true)
+            )
+        );
+
+    await message.showModal(modal);
+    await message.reply({ embeds: [embed] });
+}
+
+async function typeChallenge(message) {
+    const sentences = [
+        'The quick brown fox jumps over the lazy dog',
+        'Pack my box with five dozen liquor jugs',
+        'How vexingly quick daft zebras jump',
+        'Bright vixens jump; dozy fowl quack',
+        'Sphinx of black quartz, judge my vow'
+    ];
+    
+    const sentence = sentences[Math.floor(Math.random() * sentences.length)];
+    data.typeChallenge = sentence;
+
+    const embed = new EmbedBuilder()
+        .setColor(Colors.Gold)
+        .setTitle('⌨️ Typing Challenge')
+        .setDescription('Type the following sentence as fast as you can:')
+        .addFields(
+            { name: 'Sentence', value: `\`\`\`${sentence}\`\`\`` }
+        );
+
+    const modal = new ModalBuilder()
+        .setCustomId('type_submit')
+        .setTitle('Typing Challenge')
+        .addComponents(
+            new ActionRowBuilder().addComponents(
+                new TextInputBuilder()
+                    .setCustomId('type_input')
+                    .setLabel('Type the sentence exactly')
+                    .setStyle(TextInputStyle.Paragraph)
+                    .setRequired(true)
+            )
+        );
+
+    await message.showModal(modal);
+    await message.reply({ embeds: [embed] });
+}
+
+// ----------------------
+// 🎯 INTERACTION HANDLERS
+// ----------------------
+
+// 🎫 TICKET SYSTEM INTERACTIONS
+async function handleTicketCreation(interaction) {
+    if (!interaction.isStringSelectMenu()) return;
+
+    const ticketType = interaction.values[0];
+    const ticketName = `ticket-${interaction.user.username.toLowerCase()}`;
+    
+    // Check if user already has an open ticket
+    for (const [channelId, ticket] of data.tickets.activeTickets) {
+        if (ticket.user === interaction.user.id && !ticket.closed) {
+            const embed = new EmbedBuilder()
+                .setColor(Colors.Red)
+                .setDescription('❌ You already have an open ticket!');
+            return interaction.reply({ embeds: [embed], ephemeral: true });
+        }
+    }
+
+    // Create ticket channel
+    try {
+        const channel = await interaction.guild.channels.create({
+            name: ticketName,
+            type: ChannelType.GuildText,
+            parent: data.tickets.category,
+            permissionOverwrites: [
+                {
+                    id: interaction.guild.roles.everyone,
+                    deny: [PermissionFlagsBits.ViewChannel]
+                },
+                {
+                    id: interaction.user.id,
+                    allow: [
+                        PermissionFlagsBits.ViewChannel,
+                        PermissionFlagsBits.SendMessages,
+                        PermissionFlagsBits.AttachFiles
+                    ]
+                },
+                ...(data.tickets.viewerRole ? [{
+                    id: data.tickets.viewerRole,
+                    allow: [
+                        PermissionFlagsBits.ViewChannel,
+                        PermissionFlagsBits.SendMessages,
+                        PermissionFlagsBits.AttachFiles
+                    ]
+                }] : [])
+            ]
+        });
+
+        // Store ticket data
+        data.tickets.activeTickets.set(channel.id, {
+            user: interaction.user.id,
+            type: ticketType,
+            claimed: false,
+            locked: false,
+            closed: false,
+            createdAt: Date.now(),
+            lastActivity: Date.now()
+        });
+
+        // Send ticket message
+        const embed = new EmbedBuilder()
+            .setColor(Colors.Blurple)
+            .setTitle(`🎫 ${ticketType} Ticket`)
+            .setDescription(`Hello ${interaction.user}, support will be with you shortly.\n\nPlease describe your issue in detail.`)
+            .setFooter({ text: 'Ticket controls below' });
+
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId('ticket_claim')
+                .setLabel('🔐 Claim')
+                .setStyle(ButtonStyle.Primary),
+            new ButtonBuilder()
+                .setCustomId('ticket_lock')
+                .setLabel('🔒 Lock')
+                .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+                .setCustomId('ticket_close')
+                .setLabel('🛑 Close')
+                .setStyle(ButtonStyle.Danger),
+            new ButtonBuilder()
+                .setCustomId('ticket_transcript')
+                .setLabel('📄 Transcript')
+                .setStyle(ButtonStyle.Success)
+        );
+
+        await channel.send({ 
+            content: `${interaction.user}${data.tickets.viewerRole ? ` <@&${data.tickets.viewerRole}>` : ''}`,
+            embeds: [embed], 
+            components: [row] 
+        });
+
+        const successEmbed = new EmbedBuilder()
+            .setColor(Colors.Green)
+            .setDescription(`✅ Your ticket has been created: ${channel}`);
+        
+        await interaction.reply({ embeds: [successEmbed], ephemeral: true });
+
+        // Start inactivity timer
+        startInactivityTimer(channel.id);
+
+    } catch (error) {
+        console.error(error);
+        const embed = new EmbedBuilder()
+            .setColor(Colors.Red)
+            .setDescription('❌ Failed to create ticket. Please contact an admin.');
+        
+        await interaction.reply({ embeds: [embed], ephemeral: true });
+    }
+}
+
+async function handleTicketAction(interaction) {
+    if (!interaction.isButton()) return;
+
+    const action = interaction.customId.split('_')[1];
+    const ticket = data.tickets.activeTickets.get(interaction.channel.id);
+    if (!ticket) return;
+
+    // Check permissions
+    const isStaff = interaction.member.permissions.has(PermissionFlagsBits.ManageMessages) || 
+                   (data.tickets.viewerRole && interaction.member.roles.cache.has(data.tickets.viewerRole));
+    
+    if (!isStaff && interaction.user.id !== ticket.user) {
+        return interaction.reply({ 
+            content: '❌ You cannot perform this action.', 
+            ephemeral: true 
+        });
+    }
+
+    switch (action) {
+        case 'claim':
+            if (ticket.claimed) {
+                const embed = new EmbedBuilder()
+                    .setColor(Colors.Red)
+                    .setDescription(`❌ This ticket is already claimed by <@${ticket.claimedBy}>`);
+                return interaction.reply({ embeds: [embed], ephemeral: true });
+            }
+
+            ticket.claimed = true;
+            ticket.claimedBy = interaction.user.id;
+            data.tickets.activeTickets.set(interaction.channel.id, ticket);
+
+            await interaction.channel.permissionOverwrites.edit(interaction.user.id, {
+                ViewChannel: true,
+                SendMessages: true,
+                AttachFiles: true
+            });
+
+            const claimEmbed = new EmbedBuilder()
+                .setColor(Colors.Green)
+                .setDescription(`✅ Ticket claimed by ${interaction.user}`);
+            
+            await interaction.reply({ embeds: [claimEmbed] });
+            break;
+
+        case 'lock':
+            if (ticket.locked) {
+                const embed = new EmbedBuilder()
+                    .setColor(Colors.Red)
+                    .setDescription('❌ This ticket is already locked');
+                return interaction.reply({ embeds: [embed], ephemeral: true });
+            }
+
+            ticket.locked = true;
+            data.tickets.activeTickets.set(interaction.channel.id, ticket);
+
+            await interaction.channel.permissionOverwrites.edit(ticket.user, {
+                SendMessages: false
+            });
+
+            const lockEmbed = new EmbedBuilder()
+                .setColor(Colors.Orange)
+                .setDescription(`🔒 Ticket locked by ${interaction.user}\n\nOnly staff can send messages now.`);
+            
+            await interaction.reply({ embeds: [lockEmbed] });
+            break;
+
+        case 'close':
+            if (ticket.closed) {
+                const embed = new EmbedBuilder()
+                    .setColor(Colors.Red)
+                    .setDescription('❌ This ticket is already closed');
+                return interaction.reply({ embeds: [embed], ephemeral: true });
+            }
+
+            ticket.closed = true;
+            data.tickets.activeTickets.set(interaction.channel.id, ticket);
+
+            const closeEmbed = new EmbedBuilder()
+                .setColor(Colors.Red)
+                .setDescription(`🛑 Ticket closed by ${interaction.user}\n\nThis channel will be deleted in 10 seconds.`);
+            
+            await interaction.reply({ embeds: [closeEmbed] });
+            
+            // Delete channel after delay
+            setTimeout(async () => {
+                try {
+                    await interaction.channel.delete();
+                    data.tickets.activeTickets.delete(interaction.channel.id);
+                } catch (error) {
+                    console.error('Failed to delete ticket channel:', error);
+                }
+            }, 10000);
+            break;
+
+        case 'transcript':
+            await interaction.deferReply({ ephemeral: true });
+            
+            // Generate transcript (simplified)
+            const messages = await interaction.channel.messages.fetch({ limit: 100 });
+            const transcript = messages.reverse().map(msg => 
+                `[${msg.createdAt.toLocaleString()}] ${msg.author.tag}: ${msg.content}`
+            ).join('\n');
+            
+            const attachment = new AttachmentBuilder()
+                .setFile(Buffer.from(transcript))
+                .setName(`transcript-${interaction.channel.name}.txt`);
+            
+            const logChannel = interaction.guild.channels.cache.get(data.tickets.logsChannel);
+            if (logChannel) {
+                await logChannel.send({ 
+                    content: `📄 Transcript for ${interaction.channel.name}`,
+                    files: [attachment] 
+                });
+            }
+
+            try {
+                await interaction.user.send({ 
+                    content: `📄 Here's the transcript for your ticket in ${interaction.guild.name}`,
+                    files: [attachment] 
+                });
+            } catch {
+                // Couldn't DM user
+            }
+
+            await interaction.editReply({ 
+                content: '✅ Transcript has been generated and sent to the logs and your DMs.',
+                ephemeral: true 
+            });
+            break;
+    }
+}
+
+// 📝 APPLICATION SYSTEM INTERACTIONS
+async function handleApplicationStart(interaction) {
+    if (!interaction.isButton()) return;
+
+    const roleId = interaction.customId.split('_')[1];
+    const role = interaction.guild.roles.cache.get(roleId);
+    if (!role) return;
+
+    // Check cooldown
+    if (data.applications.cooldowns.has(interaction.user.id)) {
+        const cooldown = data.applications.cooldowns.get(interaction.user.id);
+        if (cooldown > Date.now()) {
+            const remaining = Math.ceil((cooldown - Date.now()) / 1000 / 60);
+            return interaction.reply({ 
+                content: `⏳ You're on cooldown! Please wait ${remaining} more minutes before applying again.`, 
+                ephemeral: true 
+            });
+        }
+    }
+
+    // Set cooldown (15 minutes)
+    data.applications.cooldowns.set(interaction.user.id, Date.now() + 15 * 60 * 1000);
+
+    // Create modal with application questions
+    const modal = new ModalBuilder()
+        .setCustomId('application_modal')
+        .setTitle(`Application for ${role.name}`)
+        .addComponents(
+            ...data.applications.questions.map((question, i) => 
+                new ActionRowBuilder().addComponents(
+                    new TextInputBuilder()
+                        .setCustomId(`app_q${i + 1}`)
+                        .setLabel(question.length > 45 ? `${question.substring(0, 42)}...` : question)
+                        .setStyle(TextInputStyle.Paragraph)
+                        .setRequired(true)
+                )
+        );
+
+    // Store application data for the modal submit
+    data.currentApplication = {
+        userId: interaction.user.id,
+        roleId: role.id,
+        roleName: role.name
+    };
+
+    await interaction.showModal(modal);
+}
+
+async function handleApplicationSubmit(interaction) {
+    if (!interaction.isModalSubmit()) return;
+
+    const { userId, roleId, roleName } = data.currentApplication;
+    const user = await interaction.client.users.fetch(userId);
+
+    // Get all answers
+    const answers = [];
+    for (let i = 0; i < data.applications.questions.length; i++) {
+        const answer = interaction.fields.getTextInputValue(`app_q${i + 1}`);
+        answers.push({
+            question: data.applications.questions[i],
+            answer: answer
+        });
+    }
+
+    // Send to logs channel
+    const logChannel = interaction.guild.channels.cache.get(data.applications.logsChannel);
+    if (!logChannel) return;
+
+    const embed = new EmbedBuilder()
+        .setColor(Colors.Blurple)
+        .setTitle(`📝 New Application - ${roleName}`)
+        .setDescription(`Applicant: ${user.tag} (${user.id})`)
+        .addFields(
+            answers.map((item, i) => ({
+                name: `Question ${i + 1}`,
+                value: `**${item.question}**\n${item.answer}`,
+                inline: false
+            }))
+        )
+        .setFooter({ text: 'Review this application below' });
+
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId(`app_response_accept_${user.id}_${roleId}`)
+            .setLabel('✅ Accept')
+            .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+            .setCustomId(`app_response_reject_${user.id}`)
+            .setLabel('❌ Reject')
+            .setStyle(ButtonStyle.Danger)
+    );
+
+    await logChannel.send({ 
+        content: `New application from ${user} for ${roleName}`,
+        embeds: [embed], 
+        components: [row] 
+    });
+
+    await interaction.reply({ 
+        content: '✅ Your application has been submitted successfully!', 
+        ephemeral: true 
+    });
+}
+
+async function handleApplicationResponse(interaction) {
+    if (!interaction.isButton()) return;
+
+    const [action, userId, roleId] = interaction.customId.split('_').slice(1);
+    const user = await interaction.client.users.fetch(userId);
+    const member = interaction.guild.members.cache.get(userId);
+
+    if (action === 'accept') {
+        // Add role to user
+        try {
+            await member.roles.add(roleId);
+            
+            const embed = new EmbedBuilder()
+                .setColor(Colors.Green)
+                .setTitle('✅ Application Accepted')
+                .setDescription(`Congratulations! Your application for **${interaction.guild.roles.cache.get(roleId).name}** has been accepted.`)
+                .setFooter({ text: interaction.guild.name });
+            
+            await user.send({ embeds: [embed] });
+            
+            await interaction.update({ 
+                content: `✅ Application accepted by ${interaction.user}. Role has been assigned.`,
+                components: [] 
+            });
+        } catch (error) {
+            await interaction.reply({ 
+                content: '❌ Failed to assign role. Check bot permissions and role hierarchy.', 
+                ephemeral: true 
+            });
+        }
+    } else if (action === 'reject') {
+        // Ask for rejection reason
+        const modal = new ModalBuilder()
+            .setCustomId(`app_reject_reason_${userId}`)
+            .setTitle('Rejection Reason')
+            .addComponents(
+                new ActionRowBuilder().addComponents(
+                    new TextInputBuilder()
+                        .setCustomId('reason')
+                        .setLabel('Reason for rejection')
+                        .setStyle(TextInputStyle.Paragraph)
+                        .setRequired(true)
+                )
+            );
+
+        await interaction.showModal(modal);
+        
+        // Store interaction for follow-up
+        data.rejectInteraction = interaction;
+    }
+}
+
+// 🎮 FUN GAME INTERACTIONS
+async function handleRPSChoice(interaction) {
+    if (!interaction.isButton()) return;
+
+    const userChoice = interaction.customId.split('_')[1];
+    const choices = ['rock', 'paper', 'scissors'];
+    const botChoice = choices[Math.floor(Math.random() * choices.length)];
+
+    let result;
+    if (userChoice === botChoice) {
+        result = 'It\'s a tie!';
+    } else if (
+        (userChoice === 'rock' && botChoice === 'scissors') ||
+        (userChoice === 'paper' && botChoice === 'rock') ||
+        (userChoice === 'scissors' && botChoice === 'paper')
+    ) {
+        result = 'You win!';
+    } else {
+        result = 'I win!';
+    }
+
+    const emojiMap = {
+        rock: '🪨',
+        paper: '📄',
+        scissors: '✂️'
+    };
+
+    const embed = new EmbedBuilder()
+        .setColor(Colors.Blurple)
+        .setTitle('🪨 Rock, 📄 Paper, ✂️ Scissors')
+        .setDescription(`${interaction.user} vs. Bot`)
+        .addFields(
+            { name: 'Your Choice', value: `${emojiMap[userChoice]} ${userChoice}`, inline: true },
+            { name: 'Bot Choice', value: `${emojiMap[botChoice]} ${botChoice}`, inline: true },
+            { name: 'Result', value: result, inline: false }
+        );
+
+    await interaction.update({ embeds: [embed], components: [] });
+}
+
+async function handleGuessSubmit(interaction) {
+    if (!interaction.isModalSubmit()) return;
+
+    const guess = parseInt(interaction.fields.getTextInputValue('guess_input'));
+    const correctNumber = data.guessNumber;
+    
+    let result;
+    if (isNaN(guess)) {
+        result = 'That\'s not a valid number!';
+    } else if (guess === correctNumber) {
+        result = '🎉 Correct! You guessed the right number!';
+    } else {
+        result = `❌ Wrong! The number was ${correctNumber}.`;
+    }
+
+    const embed = new EmbedBuilder()
+        .setColor(guess === correctNumber ? Colors.Green : Colors.Red)
+        .setTitle('🔢 Guess the Number')
+        .setDescription(result)
+        .setFooter({ text: `You guessed: ${guess}` });
+
+    await interaction.reply({ embeds: [embed] });
+}
+
+async function handleMathSubmit(interaction) {
+    if (!interaction.isModalSubmit()) return;
+
+    const answer = interaction.fields.getTextInputValue('math_input');
+    const correctAnswer = data.mathAnswer;
+    
+    let result;
+    if (isNaN(answer)) {
+        result = 'That\'s not a valid number!';
+    } else if (parseInt(answer) === correctAnswer) {
+        result = '✅ Correct! Great job!';
+    } else {
+        result = `❌ Incorrect! The answer was ${correctAnswer}.`;
+    }
+
+    const embed = new EmbedBuilder()
+        .setColor(parseInt(answer) === correctAnswer ? Colors.Green : Colors.Red)
+        .setTitle('🧮 Math Challenge')
+        .setDescription(result)
+        .setFooter({ text: `Your answer: ${answer}` });
+
+    await interaction.reply({ embeds: [embed] });
+}
+
+async function handleTriviaSubmit(interaction) {
+    if (!interaction.isModalSubmit()) return;
+
+    const answer = interaction.fields.getTextInputValue('trivia_input').toLowerCase();
+    const correctAnswer = data.triviaAnswer;
+    
+    let result;
+    if (answer === correctAnswer) {
+        result = '✅ Correct! Well done!';
+    } else {
+        result = `❌ Incorrect! The correct answer was "${correctAnswer}".`;
+    }
+
+    const embed = new EmbedBuilder()
+        .setColor(answer === correctAnswer ? Colors.Green : Colors.Red)
+        .setTitle('❓ Trivia Question')
+        .setDescription(result)
+        .setFooter({ text: `Your answer: ${answer}` });
+
+    await interaction.reply({ embeds: [embed] });
+}
+
+async function handleTypeSubmit(interaction) {
+    if (!interaction.isModalSubmit()) return;
+
+    const typedText = interaction.fields.getTextInputValue('type_input');
+    const originalText = data.typeChallenge;
+    
+    let result;
+    if (typedText === originalText) {
+        result = '✅ Perfect! You typed it exactly right!';
+    } else {
+        result = '❌ Not quite right. Here\'s the original text:';
+    }
+
+    const embed = new EmbedBuilder()
+        .setColor(typedText === originalText ? Colors.Green : Colors.Red)
+        .setTitle('⌨️ Typing Challenge')
+        .setDescription(result);
+
+    if (typedText !== originalText) {
+        embed.addFields(
+            { name: 'Your Attempt', value: `\`\`\`${typedText}\`\`\`` },
+            { name: 'Original Text', value: `\`\`\`${originalText}\`\`\`` }
+        );
+    }
+
+    await interaction.reply({ embeds: [embed] });
+}
+
+// ----------------------
+// 🛠️ UTILITY FUNCTIONS
+// ----------------------
+
+function sendError(message, content) {
+    const embed = new EmbedBuilder()
+        .setColor(Colors.Red)
+        .setDescription(`❌ ${content}`);
+    return message.reply({ embeds: [embed] });
 }
 
 function parseDuration(duration) {
@@ -196,1379 +1469,75 @@ function parseDuration(duration) {
     const match = duration.match(regex);
     if (!match) return null;
 
-    const amount = parseInt(match[1]);
+    const value = parseInt(match[1]);
     const unit = match[2];
-
+    
     switch (unit) {
-        case 's': return amount * 1000;
-        case 'm': return amount * 60 * 1000;
-        case 'h': return amount * 60 * 60 * 1000;
-        case 'd': return amount * 24 * 60 * 60 * 1000;
+        case 's': return value * 1000;
+        case 'm': return value * 1000 * 60;
+        case 'h': return value * 1000 * 60 * 60;
+        case 'd': return value * 1000 * 60 * 60 * 24;
         default: return null;
     }
 }
 
-function warnUser(message, user, reason = 'No reason provided') {
-    if (!message.member.permissions.has(PermissionFlagsBits.KickMembers)) {
-        return message.channel.send({ embeds: [errorEmbed('You need kick permissions to use this command!')] });
-    }
+function formatDuration(ms) {
+    const seconds = Math.floor(ms / 1000) % 60;
+    const minutes = Math.floor(ms / (1000 * 60)) % 60;
+    const hours = Math.floor(ms / (1000 * 60 * 60)) % 24;
+    const days = Math.floor(ms / (1000 * 60 * 60 * 24));
 
-    if (!settings.warnings.has(user.id)) {
-        settings.warnings.set(user.id, []);
-    }
+    let parts = [];
+    if (days > 0) parts.push(`${days}d`);
+    if (hours > 0) parts.push(`${hours}h`);
+    if (minutes > 0) parts.push(`${minutes}m`);
+    if (seconds > 0) parts.push(`${seconds}s`);
 
-    const warnings = settings.warnings.get(user.id);
-    warnings.push({
-        reason,
-        moderator: message.author.tag,
-        timestamp: Date.now()
-    });
-
-    const embed = createEmbed(
-        `${EMOJIS.MOD} User Warned`,
-        `${user.tag} has been warned by ${message.author.tag}`,
-        COLORS.WARNING,
-        [
-            { name: 'Reason', value: reason },
-            { name: 'Total Warnings', value: warnings.length.toString() }
-        ]
-    );
-    message.channel.send({ embeds: [embed] });
-    logModAction(`User Warned: ${user.tag} by ${message.author.tag} - Reason: ${reason} - Total Warnings: ${warnings.length}`);
+    return parts.join(' ') || '0s';
 }
 
-function showWarnings(message, user) {
-    if (!settings.warnings.has(user.id) || settings.warnings.get(user.id).length === 0) {
-        return message.channel.send({ embeds: [createEmbed(`${EMOJIS.INFO} Warnings`, `${user.tag} has no warnings.`, COLORS.INFO)] });
-    }
-
-    const warnings = settings.warnings.get(user.id);
-    const fields = warnings.map((warn, index) => ({
-        name: `Warning #${index + 1}`,
-        value: `**Moderator:** ${warn.moderator}\n**Reason:** ${warn.reason}\n**Date:** <t:${Math.floor(warn.timestamp / 1000)}:R>`,
-        inline: false
-    }));
-
-    const embed = createEmbed(
-        `${EMOJIS.MOD} Warnings for ${user.tag}`,
-        `Total warnings: ${warnings.length}`,
-        COLORS.WARNING,
-        fields
-    );
-    message.channel.send({ embeds: [embed] });
-}
-
-async function clearMessages(message, amount) {
-    if (!message.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
-        return message.channel.send({ embeds: [errorEmbed('You need manage messages permissions to use this command!')] });
-    }
-
-    amount = parseInt(amount);
-  if (isNaN(amount)) {
-    return message.channel.send({ embeds: [errorEmbed('Please provide a valid number of messages to delete!')] });
-}
-
-    if (amount < 1 || amount > 100) {
-        return message.channel.send({ embeds: [errorEmbed('You can only delete between 1 and 100 messages at a time!')] });
-    }
-
-    try {
-        await message.channel.bulkDelete(amount + 1);
-        const embed = createEmbed(
-            `${EMOJIS.MOD} Messages Cleared`,
-            `${amount} messages have been deleted by ${message.author.tag}`,
-            COLORS.SUCCESS
-        );
-        const reply = await message.channel.send({ embeds: [embed] });
-        setTimeout(() => reply.delete(), 5000);
-        logModAction(`Messages Cleared: ${amount} messages by ${message.author.tag}`);
-    } catch (err) {
-        message.channel.send({ embeds: [errorEmbed(`Failed to delete messages: ${err.message}`)] });
-    }
-}
-
-async function lockChannel(message) {
-    if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
-        return message.channel.send({ embeds: [errorEmbed('You need manage channels permissions to use this command!')] });
-    }
-
-    try {
-        await message.channel.permissionOverwrites.edit(message.guild.id, {
-            SendMessages: false
-        });
-        message.channel.send({ embeds: [successEmbed(`${EMOJIS.LOCK} Channel locked by ${message.author.tag}`)] });
-        logModAction(`Channel Locked: ${message.channel.name} by ${message.author.tag}`);
-    } catch (err) {
-        message.channel.send({ embeds: [errorEmbed(`Failed to lock channel: ${err.message}`)] });
-    }
-}
-
-async function unlockChannel(message) {
-    if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
-        return message.channel.send({ embeds: [errorEmbed('You need manage channels permissions to use this command!')] });
-    }
-
-    try {
-        await message.channel.permissionOverwrites.edit(message.guild.id, {
-            SendMessages: null
-        });
-        message.channel.send({ embeds: [successEmbed(`${EMOJIS.UNLOCK} Channel unlocked by ${message.author.tag}`)] });
-        logModAction(`Channel Unlocked: ${message.channel.name} by ${message.author.tag}`);
-    } catch (err) {
-        message.channel.send({ embeds: [errorEmbed(`Failed to unlock channel: ${err.message}`)] });
-    }
-}
-
-function logModAction(action) {
-    if (!settings.modLogChannel) return;
-    const channel = client.channels.cache.get(settings.modLogChannel);
-    if (!channel) return;
-
-    const embed = createEmbed(
-        `${EMOJIS.MOD} Moderation Action`,
-        action,
-        COLORS.INFO
-    );
-    channel.send({ embeds: [embed] }).catch(console.error);
-}
-
-// Ticket system functions
-function setupTicketPanel(message, embedMessage) {
-    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-        return message.channel.send({ embeds: [errorEmbed('You need administrator permissions to use this command!')] });
-    }
-
-    settings.ticketPanel.message = embedMessage;
-    settings.ticketPanel.channelId = message.channel.id;
-    message.channel.send({ embeds: [successEmbed('Ticket panel message set successfully!')] });
-    setTimeout(() => message.delete(), 3000);
-}
-
-function setTicketOptions(message, options) {
-    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-        return message.channel.send({ embeds: [errorEmbed('You need administrator permissions to use this command!')] });
-    }
-
-    settings.ticketPanel.options = options.split(',').map(opt => opt.trim());
-    message.channel.send({ embeds: [successEmbed(`Ticket options set to: ${settings.ticketPanel.options.join(', ')}`)] });
-    setTimeout(() => message.delete(), 3000);
-}
-
-function setViewerRole(message, role) {
-    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-        return message.channel.send({ embeds: [errorEmbed('You need administrator permissions to use this command!')] });
-    }
-
-    settings.ticketPanel.viewerRole = role.id;
-    message.channel.send({ embeds: [successEmbed(`Viewer role set to ${role.name}`)] });
-    setTimeout(() => message.delete(), 3000);
-}
-
-async function deployTicketPanel(message) {
-    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-        return message.channel.send({ embeds: [errorEmbed('You need administrator permissions to use this command!')] });
-    }
-
-    if (!settings.ticketPanel.message || settings.ticketPanel.options.length === 0) {
-        return message.channel.send({ embeds: [errorEmbed('Please set the ticket message and options first!')] });
-    }
-
-    const selectOptions = settings.ticketPanel.options.map(option => ({
-        label: option,
-        value: option.toLowerCase().replace(/\s+/g, '_'),
-        emoji: EMOJIS.TICKET
-    }));
-
-    const selectMenu = createSelectMenu(
-        'ticket_create',
-        'Select a ticket type...',
-        selectOptions
-    );
-
-    const embed = createEmbed(
-        `${EMOJIS.TICKET} Support Tickets`,
-        settings.ticketPanel.message,
-        COLORS.INFO
-    );
-
-    await message.channel.send({
-        embeds: [embed],
-        components: [createActionRow([selectMenu])]
-    });
-
-    message.channel.send({ embeds: [successEmbed('Ticket panel deployed successfully!')] });
-    setTimeout(() => message.delete(), 3000);
-}
-
-async function createTicket(interaction) {
-    const ticketType = interaction.values[0];
-    const guild = interaction.guild;
-    const user = interaction.user;
-
-    // Check if user already has an open ticket
-    const existingTicket = guild.channels.cache.find(ch => 
-        ch.name === `ticket-${user.username.toLowerCase()}` && 
-        ch.parentId === settings.ticketPanel.categoryId
-    );
-
-    if (existingTicket) {
-        return interaction.reply({
-            embeds: [errorEmbed('You already have an open ticket! Please close it before creating a new one.')],
-            ephemeral: true
-        });
-    }
-
-    // Create ticket channel
-    try {
-        const channel = await guild.channels.create({
-            name: `ticket-${user.username}`,
-            type: ChannelType.GuildText,
-            parent: settings.ticketPanel.categoryId,
-            permissionOverwrites: [
-                {
-                    id: guild.id,
-                    deny: [PermissionFlagsBits.ViewChannel]
-                },
-                {
-                    id: user.id,
-                    allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages]
-                },
-                ...(settings.ticketPanel.viewerRole ? [{
-                    id: settings.ticketPanel.viewerRole,
-                    allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages]
-                }] : [])
-            ]
-        });
-
-        // Create ticket buttons
-        const buttons = createActionRow([
-            createButton('ticket_claim', 'Claim', ButtonStyle.Primary, EMOJIS.CLAIM),
-            createButton('ticket_lock', 'Lock', ButtonStyle.Secondary, EMOJIS.LOCK),
-            createButton('ticket_close', 'Close', ButtonStyle.Danger, EMOJIS.CLOSE),
-            createButton('ticket_transcript', 'Transcript', ButtonStyle.Success, EMOJIS.TRANSCRIPT)
-        ]);
-
-        // Send welcome message
-        const embed = createEmbed(
-            `${EMOJIS.TICKET} ${ticketType} Ticket`,
-            `Hello ${user}, support will be with you shortly.\n\nPlease describe your issue in detail.`,
-            COLORS.INFO,
-            [
-                { name: 'User', value: user.tag },
-                { name: 'Ticket Type', value: ticketType }
-            ]
-        );
-
-        await channel.send({
-            content: `${user} ${settings.ticketPanel.viewerRole ? `<@&${settings.ticketPanel.viewerRole}>` : ''}`,
-            embeds: [embed],
-            components: [buttons]
-        });
-
-        interaction.reply({
-            embeds: [successEmbed(`Your ticket has been created: ${channel}`)],
-            ephemeral: true
-        });
-
-        logModAction(`Ticket Created: ${channel.name} by ${user.tag} - Type: ${ticketType}`);
-    } catch (err) {
-        console.error(err);
-        interaction.reply({
-            embeds: [errorEmbed('Failed to create ticket. Please try again later.')],
-            ephemeral: true
-        });
-    }
-}
-
-async function handleTicketButton(interaction) {
-    const channel = interaction.channel;
-    const user = interaction.user;
-    const action = interaction.customId;
-
-    if (!channel.name.startsWith('ticket-')) return;
-
-    switch (action) {
-        case 'ticket_claim':
-            await claimTicket(interaction, channel, user);
-            break;
-        case 'ticket_lock':
-            await lockTicket(interaction, channel);
-            break;
-        case 'ticket_close':
-            await closeTicket(interaction, channel);
-            break;
-        case 'ticket_transcript':
-            await createTranscript(interaction, channel);
-            break;
-    }
-}
-
-async function claimTicket(interaction, channel, user) {
-    const embed = createEmbed(
-        `${EMOJIS.CLAIM} Ticket Claimed`,
-        `${user} has claimed this ticket.`,
-        COLORS.SUCCESS
-    );
-
-    await channel.permissionOverwrites.edit(user.id, {
-        ViewChannel: true,
-        SendMessages: true
-    });
-
-    await interaction.reply({ embeds: [embed] });
-    logModAction(`Ticket Claimed: ${channel.name} by ${user.tag}`);
-}
-
-async function lockTicket(interaction, channel) {
-    await channel.permissionOverwrites.edit(channel.guild.id, {
-        SendMessages: false
-    });
-
-    const embed = createEmbed(
-        `${EMOJIS.LOCK} Ticket Locked`,
-        'This ticket has been locked. Only staff can unlock it.',
-        COLORS.WARNING
-    );
-
-    await interaction.reply({ embeds: [embed] });
-    logModAction(`Ticket Locked: ${channel.name} by ${interaction.user.tag}`);
-}
-
-async function closeTicket(interaction, channel) {
-    const confirmEmbed = createEmbed(
-        `${EMOJIS.CLOSE} Confirm Closure`,
-        'Are you sure you want to close this ticket?',
-        COLORS.WARNING
-    );
-
-    const confirmButtons = createActionRow([
-        createButton('ticket_confirm_close', 'Confirm', ButtonStyle.Danger),
-        createButton('ticket_cancel_close', 'Cancel', ButtonStyle.Secondary)
-    ]);
-
-    await interaction.reply({
-        embeds: [confirmEmbed],
-        components: [confirmButtons],
-        ephemeral: true
-    });
-}
-
-async function confirmCloseTicket(interaction) {
-    const channel = interaction.channel;
-
-    const embed = createEmbed(
-        `${EMOJIS.CLOSE} Ticket Closed`,
-        `This ticket has been closed by ${interaction.user.tag}`,
-        COLORS.ERROR
-    );
-
-    await channel.send({ embeds: [embed] });
-    setTimeout(async () => {
-        await channel.delete('Ticket closed');
-    }, 5000);
-
-    logModAction(`Ticket Closed: ${channel.name} by ${interaction.user.tag}`);
-}
-
-async function createTranscript(interaction, channel) {
-    await interaction.deferReply({ ephemeral: true });
-
-    try {
-        const messages = await channel.messages.fetch({ limit: 100 });
-        const transcript = messages.reverse().map(msg => {
-            return `[${msg.createdAt.toLocaleString()}] ${msg.author.tag}: ${msg.content}`;
-        }).join('\n');
-
-        const fileName = `transcript-${channel.name}.txt`;
-        fs.writeFileSync(fileName, transcript);
-
-        await interaction.followUp({
-            content: 'Here is your transcript:',
-            files: [fileName],
-            ephemeral: true
-        });
-
-        fs.unlinkSync(fileName);
-        logModAction(`Transcript Created: ${channel.name} by ${interaction.user.tag}`);
-    } catch (err) {
-        console.error(err);
-        interaction.followUp({
-            embeds: [errorEmbed('Failed to create transcript. Please try again later.')],
-            ephemeral: true
-        });
-    }
-}
-
-// Application system functions
-function setupApplicationPanel(message, embedMessage) {
-    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-        return message.channel.send({ embeds: [errorEmbed('You need administrator permissions to use this command!')] });
-    }
-
-    settings.applications.message = embedMessage;
-    settings.applications.channelId = message.channel.id;
-    message.channel.send({ embeds: [successEmbed('Application panel message set successfully!')] });
-    setTimeout(() => message.delete(), 3000);
-}
-
-function addApplicationOptions(message, options) {
-    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-        return message.channel.send({ embeds: [errorEmbed('You need administrator permissions to use this command!')] });
-    }
-
-    settings.applications.options = options.split(',').map(opt => opt.trim());
-    message.channel.send({ embeds: [successEmbed(`Application options set to: ${settings.applications.options.join(', ')}`)] });
-    setTimeout(() => message.delete(), 3000);
-}
-
-function setApplicationQuestion(message, index, question) {
-    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-        return message.channel.send({ embeds: [errorEmbed('You need administrator permissions to use this command!')] });
-    }
-
-    index = parseInt(index) - 1;
-    if (isNaN(index) {
-        return message.channel.send({ embeds: [errorEmbed('Please provide a valid question number!')] });
-    }
-
-    settings.applications.questions[index] = question;
-    message.channel.send({ embeds: [successEmbed(`Question ${index + 1} set to: ${question}`)] });
-    setTimeout(() => message.delete(), 3000);
-}
-
-async function deployApplicationPanel(message) {
-    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-        return message.channel.send({ embeds: [errorEmbed('You need administrator permissions to use this command!')] });
-    }
-
-    if (!settings.applications.message || settings.applications.options.length === 0) {
-        return message.channel.send({ embeds: [errorEmbed('Please set the application message and options first!')] });
-    }
-
-    const buttons = settings.applications.options.map(option => 
-        createButton(`app_${option.toLowerCase().replace(/\s+/g, '_')}`, option, ButtonStyle.Primary)
-    );
-
-    const actionRows = [];
-    for (let i = 0; i < buttons.length; i += 5) {
-        actionRows.push(createActionRow(buttons.slice(i, i + 5)));
-    }
-
-    const embed = createEmbed(
-        '📝 Applications',
-        settings.applications.message,
-        COLORS.INFO
-    );
-
-    await message.channel.send({
-        embeds: [embed],
-        components: actionRows
-    });
-
-    message.channel.send({ embeds: [successEmbed('Application panel deployed successfully!')] });
-    setTimeout(() => message.delete(), 3000);
-}
-
-async function startApplication(interaction) {
-    const roleName = interaction.customId.replace('app_', '').replace(/_/g, ' ');
-    const user = interaction.user;
-
-    // Check cooldown
-    if (settings.applications.cooldowns.has(user.id)) {
-        const cooldown = settings.applications.cooldowns.get(user.id);
-        if (Date.now() - cooldown < 15 * 60 * 1000) {
-            return interaction.reply({
-                embeds: [errorEmbed(`You're on cooldown! Please wait ${Math.ceil((15 - (Date.now() - cooldown) / (60 * 1000))} more minutes.`)],
-                ephemeral: true
-            });
-        }
-    }
-
-    settings.applications.cooldowns.set(user.id, Date.now());
-
-    // Create modal
-    const modal = new ModalBuilder()
-        .setCustomId(`app_modal_${roleName}`)
-        .setTitle(`Application for ${roleName}`);
-
-    // Add text inputs for each question
-    settings.applications.questions.forEach((question, index) => {
-        modal.addComponents(
-            new ActionRowBuilder().addComponents(
-                new TextInputBuilder()
-                    .setCustomId(`app_q${index}`)
-                    .setLabel(question.length > 45 ? `${question.substring(0, 45)}...` : question)
-                    .setStyle(TextInputStyle.Paragraph)
-                    .setRequired(true)
-            )
-        );
-    });
-
-    await interaction.showModal(modal);
-}
-
-async function handleApplicationSubmit(interaction) {
-    const roleName = interaction.customId.replace('app_modal_', '');
-    const user = interaction.user;
-    const guild = interaction.guild;
-
-    // Collect responses
-    const responses = [];
-    for (let i = 0; i < settings.applications.questions.length; i++) {
-        const response = interaction.fields.getTextInputValue(`app_q${i}`);
-        responses.push({
-            question: settings.applications.questions[i],
-            answer: response
-        });
-    }
-
-    // Create embed with responses
-    const fields = responses.map((r, i) => ({
-        name: `Question ${i + 1}`,
-        value: `**${r.question}**\n${r.answer}`,
-        inline: false
-    }));
-
-    const embed = createEmbed(
-        `📝 New Application: ${roleName}`,
-        `Applicant: ${user.tag} (${user.id})`,
-        COLORS.INFO,
-        fields
-    );
-
-    // Add accept/reject buttons
-    const buttons = createActionRow([
-        createButton(`app_accept_${user.id}_${roleName}`, 'Accept', ButtonStyle.Success),
-        createButton(`app_reject_${user.id}_${roleName}`, 'Reject', ButtonStyle.Danger)
-    ]);
-
-    // Send to mod channel
-    const modChannel = settings.applications.channelId ? guild.channels.cache.get(settings.applications.channelId) : null;
-    if (modChannel) {
-        await modChannel.send({
-            content: `New application for ${roleName}`,
-            embeds: [embed],
-            components: [buttons]
-        });
-    }
-
-    await interaction.reply({
-        embeds: [successEmbed('Your application has been submitted! You will be notified of the result.')],
-        ephemeral: true
-    });
-}
-
-async function handleApplicationDecision(interaction) {
-    const [action, userId, roleName] = interaction.customId.split('_').slice(1);
-    const user = await client.users.fetch(userId);
-    const guild = interaction.guild;
-
-    if (action === 'accept') {
-        // Find role by name
-        const role = guild.roles.cache.find(r => r.name.toLowerCase() === roleName.toLowerCase());
-        if (!role) {
-            return interaction.reply({
-                embeds: [errorEmbed(`Could not find role "${roleName}"`)],
-                ephemeral: true
-            });
-        }
-
-        // Add role to user
-        const member = await guild.members.fetch(userId);
-        await member.roles.add(role);
-
-        // Notify user
-        try {
-            await user.send({
-                embeds: [successEmbed(`Congratulations! Your application for ${roleName} has been accepted.`)]
-            });
-        } catch (err) {
-            console.error(`Failed to DM user: ${err}`);
-        }
-
-        // Update embed
-        const embed = interaction.message.embeds[0];
-        embed.setColor(COLORS.SUCCESS);
-        embed.setTitle(`✅ Accepted: ${roleName}`);
-
-        await interaction.update({
-            embeds: [embed],
-            components: []
-        });
-
-        interaction.followUp({
-            embeds: [successEmbed(`Application accepted and role assigned to ${user.tag}`)],
-            ephemeral: true
-        });
-    } else {
-        // Reject application
-        // Ask for reason
-        const modal = new ModalBuilder()
-            .setCustomId(`app_reject_reason_${userId}_${roleName}`)
-            .setTitle('Rejection Reason');
-
-        modal.addComponents(
-            new ActionRowBuilder().addComponents(
-                new TextInputBuilder()
-                    .setCustomId('reason')
-                    .setLabel('Reason for rejection')
-                    .setStyle(TextInputStyle.Paragraph)
-                    .setRequired(true)
-            )
-        );
-
-        await interaction.showModal(modal);
-    }
-}
-
-async function handleRejectionReason(interaction) {
-    const [_, userId, roleName] = interaction.customId.split('_').slice(1);
-    const reason = interaction.fields.getTextInputValue('reason');
-    const user = await client.users.fetch(userId);
-
-    // Notify user
-    try {
-        await user.send({
-            embeds: [errorEmbed(`Your application for ${roleName} has been rejected.\n\nReason: ${reason}`)]
-        });
-    } catch (err) {
-        console.error(`Failed to DM user: ${err}`);
-    }
-
-    // Update embed
-    const originalMessage = interaction.message;
-    const embed = originalMessage.embeds[0];
-    embed.setColor(COLORS.ERROR);
-    embed.setTitle(`❌ Rejected: ${roleName}`);
-    embed.addFields([{ name: 'Reason', value: reason }]);
-
-    await originalMessage.edit({
-        embeds: [embed],
-        components: []
-    });
-
-    await interaction.reply({
-        embeds: [successEmbed(`Application rejected and user notified.`)],
-        ephemeral: true
-    });
-}
-
-// Utility functions
-async function sendRoleDM(message, role, content) {
-    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-        return message.channel.send({ embeds: [errorEmbed('You need administrator permissions to use this command!')] });
-    }
-
-    const members = await message.guild.members.fetch();
-    const roleMembers = members.filter(m => m.roles.cache.has(role.id));
-
-    if (roleMembers.size === 0) {
-        return message.channel.send({ embeds: [errorEmbed('No members found with that role!')] });
-    }
-
-    const embed = createEmbed(
-        '📢 Announcement',
-        content,
-        COLORS.INFO,
-        [],
-        `Sent to ${role.name} role`
-    );
-
-    let success = 0;
-    let fails = 0;
-
-    for (const [_, member] of roleMembers) {
-        try {
-            await member.send({ embeds: [embed] });
-            success++;
-        } catch (err) {
-            fails++;
-        }
-    }
-
-    message.channel.send({
-        embeds: [successEmbed(`DM sent to ${success} members (${fails} failed)`)]
-    });
-}
-
-function sendBotMessage(message, content) {
-    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-        return message.channel.send({ embeds: [errorEmbed('You need administrator permissions to use this command!')] });
-    }
-
-    message.channel.send(content);
-    message.delete().catch(console.error);
-}
-
-function sendEmbed(message, color, content) {
-    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-        return message.channel.send({ embeds: [errorEmbed('You need administrator permissions to use this command!')] });
-    }
-
-    const embed = createEmbed(
-        '',
-        content,
-        color
-    );
-
-    message.channel.send({ embeds: [embed] });
-    message.delete().catch(console.error);
-}
-
-async function createPoll(message, question) {
-    if (!message.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
-        return message.channel.send({ embeds: [errorEmbed('You need manage messages permissions to use this command!')] });
-    }
-
-    const embed = createEmbed(
-        '📊 Poll',
-        question,
-        COLORS.INFO
-    );
-
-    const poll = await message.channel.send({ embeds: [embed] });
-    await poll.react('👍');
-    await poll.react('👎');
-    message.delete().catch(console.error);
-}
-
-function showServerInfo(message) {
-    const guild = message.guild;
-    const owner = guild.members.cache.get(guild.ownerId);
-
-    const embed = createEmbed(
-        'ℹ️ Server Information',
-        '',
-        COLORS.INFO,
-        [
-            { name: 'Name', value: guild.name, inline: true },
-            { name: 'ID', value: guild.id, inline: true },
-            { name: 'Owner', value: owner?.user.tag || 'Unknown', inline: true },
-            { name: 'Created', value: `<t:${Math.floor(guild.createdTimestamp / 1000)}:R>`, inline: true },
-            { name: 'Members', value: guild.memberCount.toString(), inline: true },
-            { name: 'Roles', value: guild.roles.cache.size.toString(), inline: true },
-            { name: 'Channels', value: guild.channels.cache.size.toString(), inline: true },
-            { name: 'Boosts', value: guild.premiumSubscriptionCount.toString(), inline: true },
-            { name: 'Boost Level', value: guild.premiumTier.toString(), inline: true }
-        ]
-    );
-
-    if (guild.icon) embed.setThumbnail(guild.iconURL());
-    message.channel.send({ embeds: [embed] });
-}
-
-function showUserInfo(message, user) {
-    const member = message.guild.members.cache.get(user.id);
-    if (!member) return message.channel.send({ embeds: [errorEmbed('User not found in this server!')] });
-
-    const roles = member.roles.cache
-        .filter(role => role.id !== message.guild.id)
-        .map(role => role.toString())
-        .join(' ') || 'None';
-
-    const embed = createEmbed(
-        'ℹ️ User Information',
-        '',
-        COLORS.INFO,
-        [
-            { name: 'Username', value: user.tag, inline: true },
-            { name: 'ID', value: user.id, inline: true },
-            { name: 'Created', value: `<t:${Math.floor(user.createdTimestamp / 1000)}:R>`, inline: true },
-            { name: 'Joined', value: `<t:${Math.floor(member.joinedTimestamp / 1000)}:R>`, inline: true },
-            { name: 'Nickname', value: member.nickname || 'None', inline: true },
-            { name: 'Bot', value: user.bot ? 'Yes' : 'No', inline: true },
-            { name: 'Roles', value: roles, inline: false },
-            { name: 'Status', value: member.presence?.status || 'offline', inline: true },
-            { name: 'Client', value: member.presence?.clientStatus ? Object.keys(member.presence.clientStatus).join(', ') : 'None', inline: true }
-        ]
-    );
-
-    if (user.avatar) embed.setThumbnail(user.displayAvatarURL());
-    message.channel.send({ embeds: [embed] });
-}
-
-// Fun commands
-async function rockPaperScissors(message) {
-    const buttons = createActionRow([
-        createButton('rps_rock', 'Rock', ButtonStyle.Primary, '🪨'),
-        createButton('rps_paper', 'Paper', ButtonStyle.Primary, '📄'),
-        createButton('rps_scissors', 'Scissors', ButtonStyle.Primary, '✂️')
-    ]);
-
-    const embed = createEmbed(
-        '🎮 Rock Paper Scissors',
-        'Choose your move!',
-        COLORS.INFO
-    );
-
-    const reply = await message.channel.send({
-        embeds: [embed],
-        components: [buttons]
-    });
-
-    const filter = i => i.user.id === message.author.id;
-    const collector = reply.createMessageComponentCollector({ filter, time: 30000 });
-
-    collector.on('collect', async interaction => {
-        const choices = ['🪨 Rock', '📄 Paper', '✂️ Scissors'];
-        const botChoice = choices[Math.floor(Math.random() * choices.length)];
-        const userChoice = interaction.customId.replace('rps_', '');
-        
-        let result;
-        if (
-            (userChoice === 'rock' && botChoice.includes('Scissors')) ||
-            (userChoice === 'paper' && botChoice.includes('Rock')) ||
-            (userChoice === 'scissors' && botChoice.includes('Paper'))
-        ) {
-            result = 'You win!';
-        } else if (
-            (userChoice === 'rock' && botChoice.includes('Paper')) ||
-            (userChoice === 'paper' && botChoice.includes('Scissors')) ||
-            (userChoice === 'scissors' && botChoice.includes('Rock'))
-        ) {
-            result = 'I win!';
-        } else {
-            result = "It's a tie!";
-        }
-
-        const resultEmbed = createEmbed(
-            '🎮 Rock Paper Scissors - Result',
-            `You chose ${userChoice}\nI chose ${botChoice}\n\n**${result}**`,
-            COLORS.INFO
-        );
-
-        await interaction.update({
-            embeds: [resultEmbed],
-            components: []
-        });
-    });
-
-    collector.on('end', () => {
-        if (!reply.editable) return;
-        reply.edit({
-            components: []
-        }).catch(console.error);
-    });
-}
-
-async function guessNumber(message) {
-    const number = Math.floor(Math.random() * 10) + 1;
-    let attempts = 3;
-
-    const embed = createEmbed(
-        '🎮 Guess the Number',
-        'I\'m thinking of a number between 1 and 10. You have 3 attempts to guess it!',
-        COLORS.INFO
-    );
-
-    const reply = await message.channel.send({ embeds: [embed] });
-
-    const filter = m => m.author.id === message.author.id && !isNaN(m.content);
-    const collector = message.channel.createMessageCollector({ filter, time: 30000, max: 3 });
-
-    collector.on('collect', m => {
-        const guess = parseInt(m.content);
-        attempts--;
-
-        if (guess === number) {
-            const winEmbed = createEmbed(
-                '🎮 Guess the Number - Winner!',
-                `🎉 Correct! The number was ${number}.`,
-                COLORS.SUCCESS
-            );
-            reply.edit({ embeds: [winEmbed] });
-            collector.stop();
-            return;
-        }
-
-        const hint = guess < number ? 'higher' : 'lower';
-        const attemptText = attempts === 1 ? 'last attempt' : `${attempts} attempts left`;
-
-        const attemptEmbed = createEmbed(
-            '🎮 Guess the Number',
-            `❌ Wrong! The number is ${hint}. You have ${attemptText}.`,
-            COLORS.WARNING
-        );
-
-        reply.edit({ embeds: [attemptEmbed] });
-    });
-
-    collector.on('end', (collected, reason) => {
-        if (reason === 'time' || attempts === 0) {
-            const loseEmbed = createEmbed(
-                '🎮 Guess the Number - Game Over',
-                `😢 You lost! The number was ${number}.`,
-                COLORS.ERROR
-            );
-            reply.edit({ embeds: [loseEmbed] });
-        }
-    });
-}
-
-async function mathChallenge(message) {
-    const operations = ['+', '-', '*'];
-    const num1 = Math.floor(Math.random() * 10) + 1;
-    const num2 = Math.floor(Math.random() * 10) + 1;
-    const operation = operations[Math.floor(Math.random() * operations.length)];
-
-    let answer;
-    switch (operation) {
-        case '+': answer = num1 + num2; break;
-        case '-': answer = num1 - num2; break;
-        case '*': answer = num1 * num2; break;
-    }
-
-    const embed = createEmbed(
-        '🎮 Math Challenge',
-        `What is ${num1} ${operation} ${num2}?`,
-        COLORS.INFO
-    );
-
-    const reply = await message.channel.send({ embeds: [embed] });
-
-    const filter = m => m.author.id === message.author.id && !isNaN(m.content);
-    const collector = message.channel.createMessageCollector({ filter, time: 15000, max: 1 });
-
-    collector.on('collect', m => {
-        const guess = parseInt(m.content);
-        if (guess === answer) {
-            const winEmbed = createEmbed(
-                '🎮 Math Challenge - Correct!',
-                `✅ ${num1} ${operation} ${num2} = ${answer}`,
-                COLORS.SUCCESS
-            );
-            reply.edit({ embeds: [winEmbed] });
-        } else {
-            const loseEmbed = createEmbed(
-                '🎮 Math Challenge - Incorrect',
-                `❌ The correct answer was ${answer}`,
-                COLORS.ERROR
-            );
-            reply.edit({ embeds: [loseEmbed] });
-        }
-    });
-
-    collector.on('end', () => {
-        if (collector.collected.size === 0) {
-            const timeoutEmbed = createEmbed(
-                '🎮 Math Challenge - Time\'s Up!',
-                `⏰ The correct answer was ${answer}`,
-                COLORS.WARNING
-            );
-            reply.edit({ embeds: [timeoutEmbed] });
-        }
-    });
-}
-
-async function triviaQuestion(message) {
-    const questions = [
-        {
-            question: 'What is the capital of France?',
-            answer: 'paris'
-        },
-        {
-            question: 'How many continents are there?',
-            answer: '7'
-        },
-        {
-            question: 'What is the largest planet in our solar system?',
-            answer: 'jupiter'
-        }
-    ];
-
-    const q = questions[Math.floor(Math.random() * questions.length)];
-
-    const embed = createEmbed(
-        '🎮 Trivia',
-        q.question,
-        COLORS.INFO
-    );
-
-    const reply = await message.channel.send({ embeds: [embed] });
-
-    const filter = m => m.author.id === message.author.id;
-    const collector = message.channel.createMessageCollector({ filter, time: 15000, max: 1 });
-
-    collector.on('collect', m => {
-        if (m.content.toLowerCase() === q.answer.toLowerCase()) {
-            const winEmbed = createEmbed(
-                '🎮 Trivia - Correct!',
-                `✅ The answer was ${q.answer}`,
-                COLORS.SUCCESS
-            );
-            reply.edit({ embeds: [winEmbed] });
-        } else {
-            const loseEmbed = createEmbed(
-                '🎮 Trivia - Incorrect',
-                `❌ The correct answer was ${q.answer}`,
-                COLORS.ERROR
-            );
-            reply.edit({ embeds: [loseEmbed] });
-        }
-    });
-
-    collector.on('end', () => {
-        if (collector.collected.size === 0) {
-            const timeoutEmbed = createEmbed(
-                '🎮 Trivia - Time\'s Up!',
-                `⏰ The correct answer was ${q.answer}`,
-                COLORS.WARNING
-            );
-            reply.edit({ embeds: [timeoutEmbed] });
-        }
-    });
-}
-
-async function typingChallenge(message) {
-    const sentences = [
-        'The quick brown fox jumps over the lazy dog.',
-        'Pack my box with five dozen liquor jugs.',
-        'How vexingly quick daft zebras jump!'
-    ];
-
-    const sentence = sentences[Math.floor(Math.random() * sentences.length)];
-
-    const embed = createEmbed(
-        '🎮 Typing Challenge',
-        `Type the following sentence exactly as shown:\n\n\`${sentence}\``,
-        COLORS.INFO
-    );
-
-    const reply = await message.channel.send({ embeds: [embed] });
-
-    const filter = m => m.author.id === message.author.id;
-    const collector = message.channel.createMessageCollector({ filter, time: 30000, max: 1 });
-
-    collector.on('collect', m => {
-        if (m.content === sentence) {
-            const timeTaken = (m.createdTimestamp - reply.createdTimestamp) / 1000;
-            const winEmbed = createEmbed(
-                '🎮 Typing Challenge - Success!',
-                `✅ You typed it correctly in ${timeTaken.toFixed(2)} seconds!`,
-                COLORS.SUCCESS
-            );
-            reply.edit({ embeds: [winEmbed] });
-        } else {
-            const loseEmbed = createEmbed(
-                '🎮 Typing Challenge - Failed',
-                `❌ Your typing didn't match exactly. Try again!`,
-                COLORS.ERROR
-            );
-            reply.edit({ embeds: [loseEmbed] });
-        }
-    });
-
-    collector.on('end', () => {
-        if (collector.collected.size === 0) {
-            const timeoutEmbed = createEmbed(
-                '🎮 Typing Challenge - Time\'s Up!',
-                `⏰ You didn't type the sentence in time.`,
-                COLORS.WARNING
-            );
-            reply.edit({ embeds: [timeoutEmbed] });
-        }
-    });
-}
-
-// Help command
-function showHelp(message) {
-    const embed = createEmbed(
-        '❓ Help Menu',
-        'Here are all the available commands:',
-        COLORS.INFO
-    );
-
-    const categories = [
-        {
-            name: '🎫 Ticket System',
-            commands: [
-                { name: '!ticket msg <message>', value: 'Set the ticket panel message' },
-                { name: '!setoptions <option1,option2,...>', value: 'Set ticket dropdown options' },
-                { name: '!setviewer @role', value: 'Set default viewer role for tickets' },
-                { name: '!deployticketpanel', value: 'Deploy the ticket panel' }
-            ]
-        },
-        {
-            name: '📝 Application System',
-            commands: [
-                { name: '!app msg <message>', value: 'Set the application panel message' },
-                { name: '!addoptions <role1,role2,...>', value: 'Add application role buttons' },
-                { name: '!ques1-10 <question>', value: 'Set application questions' },
-                { name: '!deployapp', value: 'Deploy the application panel' }
-            ]
-        },
-        {
-            name: '🛡️ Moderation',
-            commands: [
-                { name: '!ban @user [reason]', value: 'Ban a user' },
-                { name: '!kick @user [reason]', value: 'Kick a user' },
-                { name: '!mute @user <duration>', value: 'Mute a user' },
-                { name: '!unmute @user', value: 'Unmute a user' },
-                { name: '!warn @user [reason]', value: 'Warn a user' },
-                { name: '!warnings @user', value: 'View user warnings' },
-                { name: '!clear <amount>', value: 'Delete messages' },
-                { name: '!lock', value: 'Lock channel' },
-                { name: '!unlock', value: 'Unlock channel' }
-            ]
-        },
-        {
-            name: '💬 Utility',
-            commands: [
-                { name: '!dm @role <message>', value: 'DM all users with role' },
-                { name: '!msg <message>', value: 'Send message as bot' },
-                { name: '!embed <color> <message>', value: 'Send embed message' },
-                { name: '!poll <question>', value: 'Create a poll' },
-                { name: '!serverinfo', value: 'Show server info' },
-                { name: '!userinfo @user', value: 'Show user info' }
-            ]
-        },
-        {
-            name: '🎮 Fun & Games',
-            commands: [
-                { name: '!rps', value: 'Rock Paper Scissors' },
-                { name: '!guess', value: 'Guess the number' },
-                { name: '!math', value: 'Math challenge' },
-                { name: '!trivia', value: 'Trivia question' },
-                { name: '!type', value: 'Typing challenge' }
-            ]
-        }
-    ];
-
-    categories.forEach(category => {
-        embed.addFields({
-            name: category.name,
-            value: category.commands.map(cmd => `**${cmd.name}** - ${cmd.value}`).join('\n'),
-            inline: false
-        });
-    });
-
-    message.channel.send({ embeds: [embed] });
-}
-
-// Event handlers
-client.on('ready', () => {
-    console.log(`Logged in as ${client.user.tag}!`);
-    client.user.setActivity('!help', { type: 'WATCHING' });
-});
-
-client.on('messageCreate', async message => {
-    if (message.author.bot) return;
-    if (!message.content.startsWith('!')) return;
-
-    const args = message.content.slice(1).trim().split(/ +/);
-    const command = args.shift().toLowerCase();
-    const content = args.join(' ');
-
-    // Delete command message for certain commands
-    if (['set', 'add', 'ques', 'ticket', 'app'].some(cmd => command.startsWith(cmd))) {
-        setTimeout(() => message.delete().catch(console.error), 5000);
-    }
-
-    try {
-        switch (command) {
-            // Ticket system
-            case 'ticket':
-                if (args[0] === 'msg') setupTicketPanel(message, content.replace('msg', '').trim());
-                break;
-            case 'setoptions':
-                setTicketOptions(message, content);
-                break;
-            case 'setviewer':
-                setViewerRole(message, message.mentions.roles.first());
-                break;
-            case 'deployticketpanel':
-                deployTicketPanel(message);
-                break;
-
-            // Application system
-            case 'app':
-                if (args[0] === 'msg') setupApplicationPanel(message, content.replace('msg', '').trim());
-                break;
-            case 'addoptions':
-                addApplicationOptions(message, content);
-                break;
-            case 'deployapp':
-                deployApplicationPanel(message);
-                break;
-            case 'ques1':
-            case 'ques2':
-            case 'ques3':
-            case 'ques4':
-            case 'ques5':
-            case 'ques6':
-            case 'ques7':
-            case 'ques8':
-            case 'ques9':
-            case 'ques10':
-                setApplicationQuestion(message, command.replace('ques', ''), content);
-                break;
-
-            // Moderation
-            case 'ban':
-                banUser(message, message.mentions.users.first(), content);
-                break;
-            case 'kick':
-                kickUser(message, message.mentions.users.first(), content);
-                break;
-            case 'mute':
-                muteUser(message, message.mentions.users.first(), args[1]);
-                break;
-            case 'unmute':
-                unmuteUser(message, message.mentions.users.first());
-                break;
-            case 'warn':
-                warnUser(message, message.mentions.users.first(), content);
-                break;
-            case 'warnings':
-                showWarnings(message, message.mentions.users.first() || message.author);
-                break;
-            case 'clear':
-                clearMessages(message, args[0]);
-                break;
-            case 'lock':
-                lockChannel(message);
-                break;
-            case 'unlock':
-                unlockChannel(message);
-                break;
-
-            // Utility
-            case 'dm':
-                sendRoleDM(message, message.mentions.roles.first(), content.replace(/<@&\d+>/, '').trim());
-                break;
-            case 'msg':
-                sendBotMessage(message, content);
-                break;
-            case 'embed':
-                sendEmbed(message, args[0], content.replace(args[0], '').trim());
-                break;
-            case 'poll':
-                createPoll(message, content);
-                break;
-            case 'serverinfo':
-                showServerInfo(message);
-                break;
-            case 'userinfo':
-                showUserInfo(message, message.mentions.users.first() || message.author);
-                break;
-
-            // Fun & Games
-            case 'rps':
-                rockPaperScissors(message);
-                break;
-            case 'guess':
-                guessNumber(message);
-                break;
-            case 'math':
-                mathChallenge(message);
-                break;
-            case 'trivia':
-                triviaQuestion(message);
-                break;
-            case 'type':
-                typingChallenge(message);
-                break;
-
-            // Help
-            case 'help':
-                showHelp(message);
-                break;
-        }
-    } catch (err) {
-        console.error(err);
-        message.channel.send({ embeds: [errorEmbed('An error occurred while executing that command.')] });
-    }
-});
-
-client.on('interactionCreate', async interaction => {
-    try {
-        if (interaction.isStringSelectMenu()) {
-            if (interaction.customId === 'ticket_create') {
-                await createTicket(interaction);
-            }
-        } else if (interaction.isButton()) {
-            if (interaction.customId.startsWith('ticket_')) {
-                await handleTicketButton(interaction);
-            } else if (interaction.customId.startsWith('app_')) {
-                if (interaction.customId.startsWith('app_accept_') || interaction.customId.startsWith('app_reject_')) {
-                    await handleApplicationDecision(interaction);
-                } else {
-                    await startApplication(interaction);
+function startInactivityTimer(channelId) {
+    const ticket = data.tickets.activeTickets.get(channelId);
+    if (!ticket) return;
+
+    const checkInactivity = async () => {
+        const now = Date.now();
+        const inactiveTime = now - ticket.lastActivity;
+        const thirtyMinutes = 30 * 60 * 1000;
+
+        if (inactiveTime >= thirtyMinutes && !ticket.closed) {
+            const channel = client.channels.cache.get(channelId);
+            if (!channel) return;
+
+            const embed = new EmbedBuilder()
+                .setColor(Colors.Red)
+                .setDescription('🛑 This ticket is being closed due to 30 minutes of inactivity.');
+
+            await channel.send({ embeds: [embed] });
+            
+            // Close the ticket
+            ticket.closed = true;
+            data.tickets.activeTickets.set(channelId, ticket);
+            
+            setTimeout(async () => {
+                try {
+                    await channel.delete();
+                    data.tickets.activeTickets.delete(channelId);
+                } catch (error) {
+                    console.error('Failed to delete inactive ticket:', error);
                 }
-            } else if (interaction.customId.startsWith('rps_')) {
-                // Handled in the rockPaperScissors function
-            }
-        } else if (interaction.isModalSubmit()) {
-            if (interaction.customId.startsWith('app_modal_')) {
-                await handleApplicationSubmit(interaction);
-            } else if (interaction.customId.startsWith('app_reject_reason_')) {
-                await handleRejectionReason(interaction);
-            }
+            }, 10000);
+        } else if (!ticket.closed) {
+            // Check again in 1 minute
+            setTimeout(checkInactivity, 60 * 1000);
         }
-    } catch (err) {
-        console.error(err);
-        if (interaction.replied || interaction.deferred) {
-            interaction.followUp({ embeds: [errorEmbed('An error occurred while processing your interaction.')], ephemeral: true });
-        } else {
-            interaction.reply({ embeds: [errorEmbed('An error occurred while processing your interaction.')], ephemeral: true });
-        }
-    }
-});
+    };
 
-client.on('messageCreate', message => {
-    if (message.author.bot) return;
+    // Initial check after 30 minutes
+    setTimeout(checkInactivity, 30 * 60 * 1000);
+}
 
-    // Anti-link system
-    if (message.content.match(/(https?:\/\/[^\s]+)/g) && !message.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
-        message.delete().catch(console.error);
-        if (settings.modLogChannel) {
-            const logChannel = message.guild.channels.cache.get(settings.modLogChannel);
-            if (logChannel) {
-                logChannel.send({
-                    embeds: [createEmbed(
-                        '⚠️ Link Detected',
-                        `${message.author.tag} tried to send a link in ${message.channel}`,
-                        COLORS.WARNING,
-                        [
-                            { name: 'Message', value: message.content },
-                            { name: 'Action', value: 'Message deleted' }
-                        ]
-                    )]
-                });
-            }
-        }
-        return;
-    }
-
-    // Blacklisted words filter
-    const blacklisted = settings.blacklistedWords.find(word => 
-        message.content.toLowerCase().includes(word.toLowerCase())
-    );
-
-    if (blacklisted) {
-        message.delete().catch(console.error);
-        if (settings.modLogChannel) {
-            const logChannel = message.guild.channels.cache.get(settings.modLogChannel);
-            if (logChannel) {
-                logChannel.send({
-                    embeds: [createEmbed(
-                        '⚠️ Blacklisted Word Detected',
-                        `${message.author.tag} tried to use a blacklisted word in ${message.channel}`,
-                        COLORS.WARNING,
-                        [
-                            { name: 'Word', value: blacklisted },
-                            { name: 'Action', value: 'Message deleted' }
-                        ]
-                    )]
-                });
-            }
-        }
-        return;
-    }
-});
-
-// Start bot
-client.login(process.env.TOKEN);
-
-// Keep alive for Render
-require('./keep_alive');
+// ----------------------
+// 🚀 START THE BOT
+// ----------------------
+client.login(process.env.DISCORD_TOKEN);
