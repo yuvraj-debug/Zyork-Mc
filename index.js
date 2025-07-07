@@ -264,9 +264,9 @@ async function clearMessages(message, amount) {
     }
 
     amount = parseInt(amount);
-    if (isNaN(amount) {
-        return message.channel.send({ embeds: [errorEmbed('Please provide a valid number of messages to delete!')] });
-    }
+  if (isNaN(amount)) {
+    return message.channel.send({ embeds: [errorEmbed('Please provide a valid number of messages to delete!')] });
+}
 
     if (amount < 1 || amount > 100) {
         return message.channel.send({ embeds: [errorEmbed('You can only delete between 1 and 100 messages at a time!')] });
