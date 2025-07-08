@@ -24,7 +24,7 @@ const server = http.createServer((req, res) => {
   res.end('Bot is alive!');
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
   console.log(`Keep-alive server is running on port ${PORT}`);
   console.log(`Server started at ${new Date().toISOString()}`);
@@ -56,7 +56,7 @@ function handleError(error, interaction) {
   if (interaction.replied || interaction.deferred) {
     interaction.editReply({ embeds: [errorEmbed] }).catch(console.error);
   } else {
-    interaction.reply({ embeds: [errorEmbed], flags: { ephemeral: true } }).catch(console.error);
+    interaction.reply({ embeds: [errorEmbed], ephemeral: true }).catch(console.error);
   }
 }
 
@@ -1592,6 +1592,11 @@ client.once('ready', () => {
   setupDmAndEmbedTools();
   setupUtilityCommands();
 });
+
+// Error handling
+client.on('error', console.error);
+process.on('unhandledRejection', console.error);
+process.on('uncaughtException', console.error);
 
 // Login to Discord
 client.login(process.env.TOKEN).catch(err => {
