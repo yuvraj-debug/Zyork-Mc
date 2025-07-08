@@ -1,8 +1,8 @@
 services:
   - type: web
-    name: zyork-bot
+    name: your-service-name
     env: node
+    port: 10000  # This tells Render which port to expect
     buildCommand: npm install
     startCommand: node index.js
     healthCheckPath: /health
-    port: 10000 # Match this with your PORT variable
