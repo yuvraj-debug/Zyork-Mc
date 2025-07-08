@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { Client, IntentsBitField, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, PermissionFlagsBits, SelectMenuBuilder, Collection, Events } = require('discord.js');
+const { Client, IntentsBitField, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, PermissionFlagsBits, StringSelectMenuBuilder, Collection, Events } = require('discord.js');
 const http = require('http');
 
 // Initialize client with required intents
@@ -14,12 +14,25 @@ const client = new Client({
   ]
 });
 
-// Keep alive server
+// Keep alive server with Render.com compatibility
 const server = http.createServer((req, res) => {
+  if (req.url === '/health') {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    return res.end('OK');
+  }
   res.writeHead(200, { 'Content-Type': 'text/plain' });
   res.end('Bot is alive!');
 });
-server.listen(3000, () => console.log('Keep-alive server is running on port 3000'));
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`Keep-alive server is running on port ${PORT}`);
+  console.log(`Server started at ${new Date().toISOString()}`);
+});
+
+server.on('error', (error) => {
+  console.error('Server error:', error);
+});
 
 // Data storage
 const botData = {
@@ -28,7 +41,7 @@ const botData = {
   warnings: new Map(),
   warnLimits: new Map(),
   games: new Map(),
-  premiumRoles: new Map() // Stores roles with full bot permissions
+  premiumRoles: new Map()
 };
 
 // Error handler with colorful embeds
@@ -43,7 +56,7 @@ function handleError(error, interaction) {
   if (interaction.replied || interaction.deferred) {
     interaction.editReply({ embeds: [errorEmbed] }).catch(console.error);
   } else {
-    interaction.reply({ embeds: [errorEmbed], ephemeral: true }).catch(console.error);
+    interaction.reply({ embeds: [errorEmbed], flags: { ephemeral: true } }).catch(console.error);
   }
 }
 
@@ -56,7 +69,6 @@ function hasPremiumPermissions(member) {
 
 // Ticket system
 function setupTicketSystem() {
-  // Ticket panel message command
   client.on('messageCreate', async message => {
     if (!message.content.startsWith('!') || message.author.bot) return;
 
@@ -64,7 +76,6 @@ function setupTicketSystem() {
     const command = args.shift().toLowerCase();
 
     try {
-      // Ticket message setup
       if (command === 'ticket' && args[0] === 'msg') {
         if (!hasPremiumPermissions(message.member)) {
           return message.reply('❌ You need premium permissions to set up tickets!');
@@ -82,7 +93,6 @@ function setupTicketSystem() {
         message.reply({ embeds: [successEmbed] });
       }
 
-      // Set ticket options
       if (command === 'setoptions') {
         if (!hasPremiumPermissions(message.member)) {
           return message.reply('❌ You need premium permissions to set ticket options!');
@@ -107,7 +117,6 @@ function setupTicketSystem() {
         message.reply({ embeds: [successEmbed] });
       }
 
-      // Set ticket viewer role
       if (command === 'setviewer') {
         if (!hasPremiumPermissions(message.member)) {
           return message.reply('❌ You need premium permissions to set ticket viewers!');
@@ -126,7 +135,6 @@ function setupTicketSystem() {
         message.reply({ embeds: [successEmbed] });
       }
 
-      // Set ticket category
       if (command === 'setticketcategory') {
         if (!hasPremiumPermissions(message.member)) {
           return message.reply('❌ You need premium permissions to set the ticket category!');
@@ -145,7 +153,6 @@ function setupTicketSystem() {
         message.reply({ embeds: [successEmbed] });
       }
 
-      // Deploy ticket panel
       if (command === 'deployticketpanel') {
         if (!hasPremiumPermissions(message.member)) {
           return message.reply('❌ You need premium permissions to deploy ticket panels!');
@@ -156,7 +163,7 @@ function setupTicketSystem() {
         }
 
         const selectMenu = new ActionRowBuilder().addComponents(
-          new SelectMenuBuilder()
+          new StringSelectMenuBuilder()
             .setCustomId('ticket_type')
             .setPlaceholder('Select a ticket type')
             .addOptions(settings.options.map(opt => ({
@@ -180,9 +187,8 @@ function setupTicketSystem() {
     }
   });
 
-  // Ticket creation
   client.on('interactionCreate', async interaction => {
-    if (!interaction.isSelectMenu() || interaction.customId !== 'ticket_type') return;
+    if (!interaction.isStringSelectMenu() || interaction.customId !== 'ticket_type') return;
 
     try {
       await interaction.deferReply({ ephemeral: true });
@@ -192,14 +198,13 @@ function setupTicketSystem() {
       }
 
       const ticketType = interaction.values[0];
-      const ticketName = `ticket-${ticketType}-${interaction.user.username}`;
+      const ticketName = `ticket-${ticketType}-${interaction.user.username}-${Date.now().toString().slice(-4)}`;
       const category = interaction.guild.channels.cache.get(settings.categoryId);
 
       if (!category || category.type !== ChannelType.GuildCategory) {
         return interaction.editReply('❌ Ticket category not found or invalid. Contact server admin.');
       }
 
-      // Create ticket channel
       const ticketChannel = await interaction.guild.channels.create({
         name: ticketName,
         type: ChannelType.GuildText,
@@ -220,7 +225,6 @@ function setupTicketSystem() {
         ]
       });
 
-      // Ticket buttons
       const buttons = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId('claim_ticket')
@@ -239,7 +243,6 @@ function setupTicketSystem() {
           .setStyle(ButtonStyle.Danger)
       );
 
-      // Ticket welcome message
       const welcomeEmbed = new EmbedBuilder()
         .setColor('#5865F2')
         .setTitle(`🎟️ ${ticketType.charAt(0).toUpperCase() + ticketType.slice(1)} Ticket`)
@@ -267,9 +270,8 @@ function setupTicketSystem() {
     }
   });
 
-  // Ticket button interactions
   client.on('interactionCreate', async interaction => {
-    if (!interaction.isButton() || !interaction.channel.name.startsWith('ticket-')) return;
+    if (!interaction.isButton() || !interaction.channel?.name?.startsWith('ticket-')) return;
 
     try {
       const ticketChannel = interaction.channel;
@@ -329,29 +331,40 @@ function setupTicketSystem() {
         await interaction.reply({ embeds: [closeEmbed] });
 
         setTimeout(async () => {
-          // Create DM embed
-          const dmEmbed = new EmbedBuilder()
-            .setColor('#00FF00')
-            .setAuthor({ name: interaction.guild.name, iconURL: interaction.guild.iconURL() })
-            .setTitle('Ticket Closed')
-            .addFields(
-              { name: '🆔 Ticket ID', value: ticketChannel.id, inline: true },
-              { name: '🟢 Opened By', value: creator?.toString() || 'Unknown', inline: true },
-              { name: '🔴 Closed By', value: interaction.user.toString(), inline: true },
-              { name: '⏰ Open Time', value: new Date(ticketChannel.createdTimestamp).toLocaleDateString('en-GB'), inline: true },
-              { name: '🔐 Claimed By', value: 'Not claimed', inline: true },
-              { name: '📄 Reason', value: 'No reason specified', inline: true },
-              { name: '🕓 Closed At', value: new Date().toLocaleDateString('en-GB'), inline: true }
-            )
-            .setThumbnail(interaction.guild.iconURL());
-
           try {
-            if (creator) await creator.send({ embeds: [dmEmbed] });
-          } catch (e) {
-            console.log('Could not send DM to ticket creator');
-          }
+            const channel = await interaction.guild.channels.fetch(ticketChannel.id).catch(() => null);
+            if (!channel) {
+              console.log(`Ticket channel ${ticketChannel.id} already deleted`);
+              return;
+            }
 
-          await ticketChannel.delete('Ticket closed by staff');
+            const dmEmbed = new EmbedBuilder()
+              .setColor('#00FF00')
+              .setAuthor({ name: interaction.guild.name, iconURL: interaction.guild.iconURL() })
+              .setTitle('Ticket Closed')
+              .addFields(
+                { name: '🆔 Ticket ID', value: ticketChannel.id, inline: true },
+                { name: '🟢 Opened By', value: creator?.toString() || 'Unknown', inline: true },
+                { name: '🔴 Closed By', value: interaction.user.toString(), inline: true },
+                { name: '⏰ Open Time', value: new Date(ticketChannel.createdTimestamp).toLocaleDateString('en-GB'), inline: true },
+                { name: '🔐 Claimed By', value: 'Not claimed', inline: true },
+                { name: '📄 Reason', value: 'No reason specified', inline: true },
+                { name: '🕓 Closed At', value: new Date().toLocaleDateString('en-GB'), inline: true }
+              )
+              .setThumbnail(interaction.guild.iconURL());
+
+            try {
+              if (creator) await creator.send({ embeds: [dmEmbed] });
+            } catch (e) {
+              console.log('Could not send DM to ticket creator');
+            }
+
+            await ticketChannel.delete('Ticket closed by staff').catch(e => {
+              console.error(`Failed to delete ticket channel ${ticketChannel.id}:`, e);
+            });
+          } catch (error) {
+            console.error('Error in ticket closing process:', error);
+          }
         }, 10000);
       }
     } catch (error) {
@@ -369,7 +382,6 @@ function setupApplicationSystem() {
     const command = args.shift().toLowerCase();
 
     try {
-      // Application message setup
       if (command === 'app' && args[0] === 'msg') {
         if (!hasPremiumPermissions(message.member)) {
           return message.reply('❌ You need premium permissions to set up applications!');
@@ -387,7 +399,6 @@ function setupApplicationSystem() {
         message.reply({ embeds: [successEmbed] });
       }
 
-      // Add application options
       if (command === 'addoptions') {
         if (!hasPremiumPermissions(message.member)) {
           return message.reply('❌ You need premium permissions to set application options!');
@@ -412,7 +423,6 @@ function setupApplicationSystem() {
         message.reply({ embeds: [successEmbed] });
       }
 
-      // Set application channel
       if (command === 'setappchannel') {
         if (!hasPremiumPermissions(message.member)) {
           return message.reply('❌ You need premium permissions to set the application channel!');
@@ -431,7 +441,6 @@ function setupApplicationSystem() {
         message.reply({ embeds: [successEmbed] });
       }
 
-      // Deploy application panel
       if (command === 'deployapp') {
         if (!hasPremiumPermissions(message.member)) {
           return message.reply('❌ You need premium permissions to deploy application panels!');
@@ -461,7 +470,6 @@ function setupApplicationSystem() {
         await message.reply('✅ Application panel deployed successfully!').then(msg => setTimeout(() => msg.delete(), 5000));
       }
 
-      // Application questions
       if (command.startsWith('ques')) {
         const questionNum = parseInt(command.replace('ques', ''));
         if (isNaN(questionNum)) return;
@@ -488,7 +496,6 @@ function setupApplicationSystem() {
     }
   });
 
-  // Application button interaction
   client.on('interactionCreate', async interaction => {
     if (!interaction.isButton() || !interaction.customId.startsWith('app_')) return;
 
@@ -505,7 +512,6 @@ function setupApplicationSystem() {
         return interaction.editReply('❌ The role for this application no longer exists.');
       }
 
-      // Store application data
       botData.applicationSettings[interaction.user.id] = {
         guildId: interaction.guild.id,
         roleId: role.id,
@@ -513,7 +519,6 @@ function setupApplicationSystem() {
         currentQuestion: 0
       };
 
-      // Send first question via DM
       try {
         const questionEmbed = new EmbedBuilder()
           .setColor('#5865F2')
@@ -527,7 +532,6 @@ function setupApplicationSystem() {
         return interaction.editReply('❌ I couldn\'t send you a DM. Please enable DMs and try again.');
       }
 
-      // Collect answers in DM
       const filter = m => m.author.id === interaction.user.id && m.channel.type === ChannelType.DM;
       const collector = interaction.client.channels.cache
         .find(c => c.type === ChannelType.DM && c.recipient?.id === interaction.user.id)
@@ -574,7 +578,6 @@ function setupApplicationSystem() {
     }
   });
 
-  // Submit application
   async function submitApplication(interaction, appData) {
     try {
       const settings = botData.applicationSettings[appData.guildId];
@@ -587,7 +590,6 @@ function setupApplicationSystem() {
         return;
       }
 
-      // Application buttons
       const buttons = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId('accept_app')
@@ -601,7 +603,6 @@ function setupApplicationSystem() {
           .setStyle(ButtonStyle.Danger)
       );
 
-      // Build application embed
       const appEmbed = new EmbedBuilder()
         .setColor('#5865F2')
         .setTitle(`📋 Application for ${role.name}`)
@@ -630,7 +631,6 @@ function setupApplicationSystem() {
     }
   }
 
-  // Application decision buttons
   client.on('interactionCreate', async interaction => {
     if (!interaction.isButton() || !['accept_app', 'reject_app'].includes(interaction.customId)) return;
     if (!interaction.message.embeds[0].title.includes('Application for')) return;
@@ -638,7 +638,6 @@ function setupApplicationSystem() {
     try {
       await interaction.deferReply({ ephemeral: true });
       
-      // Extract applicant info from the embed
       const appEmbed = interaction.message.embeds[0];
       const applicantId = appEmbed.description.match(/<@!?(\d+)>/)[1];
       const applicant = interaction.guild.members.cache.get(applicantId);
@@ -651,10 +650,8 @@ function setupApplicationSystem() {
       const role = interaction.guild.roles.cache.find(r => r.name === roleName);
 
       if (interaction.customId === 'accept_app') {
-        // Add role to applicant
         await applicant.roles.add(role);
 
-        // Send acceptance DM
         const acceptEmbed = new EmbedBuilder()
           .setColor('#00FF00')
           .setTitle(`✅ Application Accepted!`)
@@ -673,7 +670,6 @@ function setupApplicationSystem() {
 
         await interaction.editReply('✅ Application accepted and role assigned!');
       } else {
-        // Send rejection DM
         const rejectEmbed = new EmbedBuilder()
           .setColor('#FF0000')
           .setTitle(`❌ Application Rejected`)
@@ -693,7 +689,6 @@ function setupApplicationSystem() {
         await interaction.editReply('✅ Application rejected and applicant notified!');
       }
 
-      // Remove buttons and update embed
       const updatedEmbed = new EmbedBuilder(appEmbed.data)
         .setColor(interaction.customId === 'accept_app' ? '#00FF00' : '#FF0000')
         .setTitle(`📋 ${interaction.customId === 'accept_app' ? '✅ Accepted' : '❌ Rejected'}: ${roleName}`);
@@ -714,7 +709,6 @@ function setupWarningSystem() {
     const command = args.shift().toLowerCase();
 
     try {
-      // Set warn limit
       if (command === 'warnlimit') {
         if (!hasPremiumPermissions(message.member)) {
           return message.reply('❌ You need premium permissions to set warn limits!');
@@ -736,7 +730,6 @@ function setupWarningSystem() {
         await message.reply({ embeds: [successEmbed] });
       }
 
-      // Warn command
       if (command === 'warn') {
         if (!hasPremiumPermissions(message.member)) {
           return message.reply('❌ You need premium permissions to use this command!');
@@ -749,7 +742,6 @@ function setupWarningSystem() {
 
         const reason = args.slice(1).join(' ') || 'No reason provided';
 
-        // Initialize warnings for guild if not exists
         if (!botData.warnings.has(message.guild.id)) {
           botData.warnings.set(message.guild.id, new Map());
         }
@@ -759,7 +751,6 @@ function setupWarningSystem() {
           guildWarnings.set(user.id, []);
         }
 
-        // Add warning
         const warnings = guildWarnings.get(user.id);
         warnings.push({
           moderator: message.author.id,
@@ -767,7 +758,6 @@ function setupWarningSystem() {
           timestamp: Date.now()
         });
 
-        // Get warn limit (default 3 if not set)
         const warnLimit = botData.warnLimits.get(message.guild.id) || 3;
         
         if (warnings.length >= warnLimit) {
@@ -819,7 +809,6 @@ function setupWarningSystem() {
         }
       }
 
-      // Check warnings
       if (command === 'warnings') {
         const user = message.mentions.users.first() || message.author;
         const guildWarnings = botData.warnings.get(message.guild.id);
@@ -854,7 +843,6 @@ function setupWarningSystem() {
 
 // Mini-games system
 function setupMiniGames() {
-  // Rock Paper Scissors
   client.on('messageCreate', async message => {
     if (!message.content.startsWith('!') || message.author.bot) return;
 
@@ -908,7 +896,6 @@ function setupMiniGames() {
           components: [buttons] 
         });
 
-        // Timeout after 60 seconds
         setTimeout(() => {
           if (botData.games.has(gameId)) {
             botData.games.delete(gameId);
@@ -918,84 +905,7 @@ function setupMiniGames() {
           }
         }, 60000);
       }
-    } catch (error) {
-      handleError(error, message);
-    }
-  });
 
-  // RPS button interaction
-  client.on('interactionCreate', async interaction => {
-    if (!interaction.isButton() || !interaction.customId.startsWith('rps_')) return;
-
-    try {
-      const choice = interaction.customId.replace('rps_', '');
-      const gameId = [...botData.games.keys()].find(key => 
-        key.includes(interaction.user.id) && key.endsWith('-rps')
-      );
-
-      if (!gameId) {
-        return interaction.reply({ content: '❌ No active game found or game expired.', ephemeral: true });
-      }
-
-      const game = botData.games.get(gameId);
-      if (!game.players.includes(interaction.user.id)) {
-        return interaction.reply({ content: '❌ You\'re not part of this game!', ephemeral: true });
-      }
-
-      game.choices[interaction.user.id] = choice;
-      await interaction.deferUpdate();
-
-      // Check if both players have chosen
-      if (Object.keys(game.choices).length === 2) {
-        const [player1, player2] = game.players;
-        const choice1 = game.choices[player1];
-        const choice2 = game.choices[player2];
-
-        // Determine winner
-        let result;
-        if (choice1 === choice2) {
-          result = 'It\'s a tie!';
-        } else if (
-          (choice1 === 'rock' && choice2 === 'scissors') ||
-          (choice1 === 'paper' && choice2 === 'rock') ||
-          (choice1 === 'scissors' && choice2 === 'paper')
-        ) {
-          result = `<@${player1}> wins!`;
-        } else {
-          result = `<@${player2}> wins!`;
-        }
-
-        const embed = new EmbedBuilder()
-          .setColor('#00FF00')
-          .setTitle('🎮 Game Results')
-          .setDescription(`${interaction.client.users.cache.get(player1).toString()} chose ${getEmoji(choice1)}\n${interaction.client.users.cache.get(player2).toString()} chose ${getEmoji(choice2)}\n\n${result}`)
-          .setFooter({ text: 'Thanks for playing!', iconURL: interaction.guild.iconURL() });
-
-        await interaction.message.edit({ embeds: [embed], components: [] });
-        botData.games.delete(gameId);
-      }
-    } catch (error) {
-      handleError(error, interaction);
-    }
-  });
-
-  function getEmoji(choice) {
-    switch (choice) {
-      case 'rock': return '🪨 Rock';
-      case 'paper': return '📄 Paper';
-      case 'scissors': return '✂️ Scissors';
-      default: return choice;
-    }
-  }
-
-  // Number guessing game
-  client.on('messageCreate', async message => {
-    if (!message.content.startsWith('!') || message.author.bot) return;
-
-    const args = message.content.slice(1).trim().split(/ +/);
-    const command = args.shift().toLowerCase();
-
-    try {
       if (command === 'guess') {
         const gameId = `${message.author.id}-guess`;
         if (botData.games.has(gameId)) {
@@ -1056,25 +966,12 @@ function setupMiniGames() {
           }
         });
       }
-    } catch (error) {
-      handleError(error, message);
-    }
-  });
 
-  // Math game
-  client.on('messageCreate', async message => {
-    if (!message.content.startsWith('!') || message.author.bot) return;
-
-    const args = message.content.slice(1).trim().split(/ +/);
-    const command = args.shift().toLowerCase();
-
-    try {
       if (command === 'math') {
         const operations = ['+', '-', '*', '/'];
         const operation = operations[Math.floor(Math.random() * operations.length)];
         let num1, num2, answer;
 
-        // Generate appropriate numbers based on operation
         switch (operation) {
           case '+':
             num1 = Math.floor(Math.random() * 100);
@@ -1092,7 +989,7 @@ function setupMiniGames() {
             answer = num1 * num2;
             break;
           case '/':
-            num2 = Math.floor(Math.random() * 10) + 1; // Avoid division by zero
+            num2 = Math.floor(Math.random() * 10) + 1;
             answer = Math.floor(Math.random() * 10);
             num1 = num2 * answer;
             break;
@@ -1146,19 +1043,7 @@ function setupMiniGames() {
           }
         });
       }
-    } catch (error) {
-      handleError(error, message);
-    }
-  });
 
-  // Trivia game
-  client.on('messageCreate', async message => {
-    if (!message.content.startsWith('!') || message.author.bot) return;
-
-    const args = message.content.slice(1).trim().split(/ +/);
-    const command = args.shift().toLowerCase();
-
-    try {
       if (command === 'trivia') {
         const triviaQuestions = [
           {
@@ -1224,59 +1109,7 @@ function setupMiniGames() {
 
         await message.channel.send({ embeds: [embed], components: [buttons] });
       }
-    } catch (error) {
-      handleError(error, message);
-    }
-  });
 
-  // Trivia button interaction
-  client.on('interactionCreate', async interaction => {
-    if (!interaction.isButton() || !interaction.customId.startsWith('trivia_')) return;
-
-    try {
-      const answerIndex = parseInt(interaction.customId.replace('trivia_', ''));
-      const gameId = `${interaction.user.id}-trivia`;
-      const game = botData.games.get(gameId);
-
-      if (!game) {
-        return interaction.reply({ content: '❌ No active trivia game found or game expired.', ephemeral: true });
-      }
-
-      clearTimeout(game.timeout);
-      await interaction.deferUpdate();
-
-      if (answerIndex === game.answer) {
-        const winEmbed = new EmbedBuilder()
-          .setColor('#00FF00')
-          .setTitle('✅ Correct Answer!')
-          .setDescription('You got it right! 🎉')
-          .setFooter({ text: 'Well done!', iconURL: interaction.user.displayAvatarURL() });
-
-        await interaction.message.edit({ embeds: [winEmbed], components: [] });
-      } else {
-        const loseEmbed = new EmbedBuilder()
-          .setColor('#FF0000')
-          .setTitle('❌ Wrong Answer!')
-          .setDescription('Better luck next time!')
-          .setFooter({ text: 'Keep trying!', iconURL: interaction.guild.iconURL() });
-
-        await interaction.message.edit({ embeds: [loseEmbed], components: [] });
-      }
-
-      botData.games.delete(gameId);
-    } catch (error) {
-      handleError(error, interaction);
-    }
-  });
-
-  // Typing speed test
-  client.on('messageCreate', async message => {
-    if (!message.content.startsWith('!') || message.author.bot) return;
-
-    const args = message.content.slice(1).trim().split(/ +/);
-    const command = args.shift().toLowerCase();
-
-    try {
       if (command === 'type') {
         const sentences = [
           "The quick brown fox jumps over the lazy dog.",
@@ -1348,6 +1181,107 @@ function setupMiniGames() {
       handleError(error, message);
     }
   });
+
+  client.on('interactionCreate', async interaction => {
+    if (!interaction.isButton() || !interaction.customId.startsWith('rps_')) return;
+
+    try {
+      const choice = interaction.customId.replace('rps_', '');
+      const gameId = [...botData.games.keys()].find(key => 
+        key.includes(interaction.user.id) && key.endsWith('-rps')
+      );
+
+      if (!gameId) {
+        return interaction.reply({ content: '❌ No active game found or game expired.', ephemeral: true });
+      }
+
+      const game = botData.games.get(gameId);
+      if (!game.players.includes(interaction.user.id)) {
+        return interaction.reply({ content: '❌ You\'re not part of this game!', ephemeral: true });
+      }
+
+      game.choices[interaction.user.id] = choice;
+      await interaction.deferUpdate();
+
+      if (Object.keys(game.choices).length === 2) {
+        const [player1, player2] = game.players;
+        const choice1 = game.choices[player1];
+        const choice2 = game.choices[player2];
+
+        let result;
+        if (choice1 === choice2) {
+          result = 'It\'s a tie!';
+        } else if (
+          (choice1 === 'rock' && choice2 === 'scissors') ||
+          (choice1 === 'paper' && choice2 === 'rock') ||
+          (choice1 === 'scissors' && choice2 === 'paper')
+        ) {
+          result = `<@${player1}> wins!`;
+        } else {
+          result = `<@${player2}> wins!`;
+        }
+
+        const embed = new EmbedBuilder()
+          .setColor('#00FF00')
+          .setTitle('🎮 Game Results')
+          .setDescription(`${interaction.client.users.cache.get(player1).toString()} chose ${getEmoji(choice1)}\n${interaction.client.users.cache.get(player2).toString()} chose ${getEmoji(choice2)}\n\n${result}`)
+          .setFooter({ text: 'Thanks for playing!', iconURL: interaction.guild.iconURL() });
+
+        await interaction.message.edit({ embeds: [embed], components: [] });
+        botData.games.delete(gameId);
+      }
+    } catch (error) {
+      handleError(error, interaction);
+    }
+  });
+
+  function getEmoji(choice) {
+    switch (choice) {
+      case 'rock': return '🪨 Rock';
+      case 'paper': return '📄 Paper';
+      case 'scissors': return '✂️ Scissors';
+      default: return choice;
+    }
+  }
+
+  client.on('interactionCreate', async interaction => {
+    if (!interaction.isButton() || !interaction.customId.startsWith('trivia_')) return;
+
+    try {
+      const answerIndex = parseInt(interaction.customId.replace('trivia_', ''));
+      const gameId = `${interaction.user.id}-trivia`;
+      const game = botData.games.get(gameId);
+
+      if (!game) {
+        return interaction.reply({ content: '❌ No active trivia game found or game expired.', ephemeral: true });
+      }
+
+      clearTimeout(game.timeout);
+      await interaction.deferUpdate();
+
+      if (answerIndex === game.answer) {
+        const winEmbed = new EmbedBuilder()
+          .setColor('#00FF00')
+          .setTitle('✅ Correct Answer!')
+          .setDescription('You got it right! 🎉')
+          .setFooter({ text: 'Well done!', iconURL: interaction.user.displayAvatarURL() });
+
+        await interaction.message.edit({ embeds: [winEmbed], components: [] });
+      } else {
+        const loseEmbed = new EmbedBuilder()
+          .setColor('#FF0000')
+          .setTitle('❌ Wrong Answer!')
+          .setDescription('Better luck next time!')
+          .setFooter({ text: 'Keep trying!', iconURL: interaction.guild.iconURL() });
+
+        await interaction.message.edit({ embeds: [loseEmbed], components: [] });
+      }
+
+      botData.games.delete(gameId);
+    } catch (error) {
+      handleError(error, interaction);
+    }
+  });
 }
 
 // DM and Embed tools
@@ -1359,7 +1293,6 @@ function setupDmAndEmbedTools() {
     const command = args.shift().toLowerCase();
 
     try {
-      // DM a role
       if (command === 'dm') {
         if (!hasPremiumPermissions(message.member)) {
           return message.reply('❌ You need premium permissions to DM roles!');
@@ -1450,7 +1383,6 @@ function setupDmAndEmbedTools() {
         });
       }
 
-      // Create embed
       if (command === 'embed') {
         const color = args.shift();
         if (!color) return message.reply('❌ Please provide a color (hex or name)!');
@@ -1462,7 +1394,6 @@ function setupDmAndEmbedTools() {
         if (color.startsWith('#')) {
           embedColor = color;
         } else {
-          // Map color names to hex
           const colorMap = {
             red: '#FF0000',
             green: '#00FF00',
@@ -1503,7 +1434,6 @@ function setupUtilityCommands() {
     const command = args.shift().toLowerCase();
 
     try {
-      // Set premium role
       if (command === 'prems') {
         if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
           return message.reply('❌ You need administrator permissions to set premium roles!');
@@ -1522,7 +1452,6 @@ function setupUtilityCommands() {
         await message.reply({ embeds: [successEmbed] });
       }
 
-      // User info command
       if (command === 'userinfo') {
         const user = message.mentions.users.first() || message.author;
         const member = message.guild.members.cache.get(user.id);
@@ -1550,7 +1479,6 @@ function setupUtilityCommands() {
         await message.channel.send({ embeds: [embed] });
       }
 
-      // Server info command
       if (command === 'serverinfo') {
         const { guild } = message;
         const owner = await guild.fetchOwner();
@@ -1574,7 +1502,6 @@ function setupUtilityCommands() {
         await message.channel.send({ embeds: [embed] });
       }
 
-      // Ping command
       if (command === 'ping') {
         const sent = await message.channel.send('🏓 Pinging...');
         const latency = sent.createdTimestamp - message.createdTimestamp;
@@ -1592,7 +1519,6 @@ function setupUtilityCommands() {
         await sent.edit({ content: '', embeds: [embed] });
       }
 
-      // Help command
       if (command === 'help') {
         const embed = new EmbedBuilder()
           .setColor('#5865F2')
@@ -1668,4 +1594,7 @@ client.once('ready', () => {
 });
 
 // Login to Discord
-client.login(process.env.TOKEN);
+client.login(process.env.TOKEN).catch(err => {
+  console.error('Failed to login:', err);
+  process.exit(1);
+});
