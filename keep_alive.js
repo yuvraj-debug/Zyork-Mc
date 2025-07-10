@@ -1,15 +1,15 @@
-// keep_alive.js
 const express = require('express');
 const app = express();
+const port = 3000;
 
 app.get('/', (req, res) => {
-  res.send('Bot is Alive!');
+  res.send('Bot is running!');
 });
 
-function keepAlive() {
-  app.listen(3000, () => {
-    console.log('✅ keep_alive server running!');
-  });
-}
+app.listen(port, () => {
+  console.log(`Keep-alive server running on port ${port}`);
+});
 
-module.exports = keepAlive;
+module.exports.keepAlive = () => {
+  // Empty function, just needs to be called
+};
