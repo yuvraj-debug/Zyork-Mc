@@ -1,6 +1,15 @@
-const http = require('http');
-const server = http.createServer((req, res) => {
-    res.writeHead(200);
-    res.end('Economy Bot is running!');
+// ====== keep_alive.js ======
+const express = require('express');
+const app = express();
+
+app.get('/', (req, res) => {
+  res.send('Bot is Alive!');
 });
-server.listen(3000);
+
+function keepAlive() {
+  app.listen(3000, () => {
+    console.log('✅ keep_alive server running!');
+  });
+}
+
+module.exports = keepAlive;
