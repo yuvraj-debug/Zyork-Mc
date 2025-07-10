@@ -1,4 +1,4 @@
-// ====== keep_alive.js ======
+// keep_alive.js
 const express = require('express');
 const app = express();
 
@@ -13,4 +13,3 @@ function keepAlive() {
 }
 
 module.exports = keepAlive;
-// ====== keep_alive.js ======

@@ -1342,3 +1342,85 @@ client.on('messageCreate', async msg => {
     msg.reply(`✅ Warn limit set to ${num}`);
   }
 });
+// ====== index.js — PART 14: MUSIC COMMANDS ======
+
+client.on('messageCreate', async msg => {
+  if (!msg.content.startsWith(prefix) || msg.author.bot || !msg.guild) return;
+  const args = msg.content.slice(prefix.length).trim().split(/ +/);
+  const command = args.shift()?.toLowerCase();
+
+  const channel = msg.member?.voice.channel;
+
+  if (['play', 'p'].includes(command)) {
+    if (!channel) return msg.reply('🔊 Join a voice channel first!');
+    const query = args.join(' ');
+    if (!query) return msg.reply('🎶 Provide a song name or URL.');
+
+    const result = await player.search(query, {
+      requestedBy: msg.author
+    });
+
+    if (!result || !result.tracks.length) return msg.reply('❌ No results found.');
+
+    const queue = await player.nodes.create(msg.guild, {
+      metadata: {
+        channel: msg.channel
+      },
+      selfDeaf: true
+    });
+
+    try {
+      if (!queue.connection) await queue.connect(channel);
+    } catch {
+      player.nodes.delete(msg.guild.id);
+      return msg.reply('❌ Failed to join the voice channel.');
+    }
+
+    queue.addTrack(result.tracks[0]);
+    if (!queue.isPlaying()) queue.play();
+
+    msg.reply(`▶️ Playing: **${result.tracks[0].title}**`);
+  }
+
+  if (command === 'skip') {
+    const queue = player.nodes.get(msg.guild.id);
+    if (!queue || !queue.isPlaying()) return msg.reply('❌ No song is currently playing.');
+    queue.node.skip();
+    msg.reply('⏭️ Skipped.');
+  }
+
+  if (command === 'stop') {
+    const queue = player.nodes.get(msg.guild.id);
+    if (!queue) return msg.reply('❌ Nothing to stop.');
+    queue.delete();
+    msg.reply('⏹️ Stopped music and left the voice channel.');
+  }
+
+  if (command === 'pause') {
+    const queue = player.nodes.get(msg.guild.id);
+    if (!queue || !queue.isPlaying()) return msg.reply('⏸️ Nothing to pause.');
+    queue.node.pause();
+    msg.reply('⏸️ Paused.');
+  }
+
+  if (command === 'resume') {
+    const queue = player.nodes.get(msg.guild.id);
+    if (!queue) return msg.reply('▶️ Nothing to resume.');
+    queue.node.resume();
+    msg.reply('▶️ Resumed.');
+  }
+
+  if (command === 'queue') {
+    const queue = player.nodes.get(msg.guild.id);
+    if (!queue || !queue.tracks.toArray().length) return msg.reply('📭 Queue is empty.');
+
+    const tracks = queue.tracks.toArray().slice(0, 5).map((t, i) => `**${i + 1}.** ${t.title}`).join('\n');
+    msg.reply({ embeds: [new EmbedBuilder().setTitle('🎶 Current Queue').setDescription(tracks).setColor('#00ffd0')] });
+  }
+
+  if (command === 'np') {
+    const queue = player.nodes.get(msg.guild.id);
+    if (!queue || !queue.currentTrack) return msg.reply('🎵 Nothing is currently playing.');
+    msg.reply(`🎧 Now Playing: **${queue.currentTrack.title}**`);
+  }
+});
