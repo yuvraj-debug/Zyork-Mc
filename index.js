@@ -2,6 +2,8 @@
 require('dotenv').config();
 const keepAlive = require('./keep_alive');
 keepAlive();
+// Start the keep-alive server
+keepAlive();
 
 const { QuickDB } = require('quick.db');
 const db = new QuickDB();
