@@ -8,11 +8,24 @@ const { REST } = require('@discordjs/rest');
 const { Routes } = require('discord-api-types/v10');
 const { Player } = require('discord-player');
 const SpotifyExtractor = require('@discord-player/extractor').SpotifyExtractor;
-const quickdb = require('quick.db');
-const db = new quickdb.QuickDB({ filePath: 'database.sqlite' });
+const Enmap = require('enmap');
+const EnmapLevel = require('enmap-level'); // Using enmap-level instead of @enmap/sqlite
 const fetch = require('node-fetch');
 const { v4: uuidv4 } = require('uuid');
 const { createTranscript } = require('discord-html-transcripts');
+
+// Initialize database with persistent storage
+const db = new Enmap({
+  provider: new EnmapLevel({ 
+    name: 'mydatabase',
+    dataDir: './database' // Creates a dedicated folder for database files
+  })
+});
+
+// Ensure database directory exists
+if (!fs.existsSync('./database')) {
+  fs.mkdirSync('./database');
+}
 
 // Initialize client
 const client = new Client({
@@ -24,15 +37,31 @@ const client = new Client({
     GatewayIntentBits.GuildMessageReactions,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.DirectMessages
-  ]
+  ],
+  presence: {
+    activities: [{
+      name: 'with your data',
+      type: ActivityType.Playing
+    }]
+  }
 });
 
-// Initialize player
+// Initialize Discord Player
 const player = new Player(client, {
   ytdlOptions: {
     quality: 'highestaudio',
     highWaterMark: 1 << 25
   }
+});
+
+// Add extractors
+player.extractors.register(SpotifyExtractor, {});
+
+// Database ready check
+db.defer.then(() => {
+  console.log('[Database] Ready!');
+}).catch(err => {
+  console.error('[Database] Error:', err);
 });
 
 // Spotify credentials
