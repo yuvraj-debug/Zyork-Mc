@@ -1774,8 +1774,15 @@ function setupApplicationSystem() {
         
         const options = args.join(' ').split(',').map(opt => opt.trim());
         const formattedOptions = options.map(opt => {
-          const [name, emoji] = opt.split(':').map(part => part.trim());
-          return { name, emoji: emoji || '📋' };
+          // Remove @ symbol if present and split by :
+          const cleanOpt = opt.replace(/^@/, '');
+          const [name, emoji] = cleanOpt.split(':').map(part => part.trim());
+          return { 
+            name, 
+            emoji: emoji || '📋',
+            // Store clean name without @
+            cleanName: name.replace(/^@/, '') 
+          };
         });
 
         botData.applicationSettings[message.guild.id] = botData.applicationSettings[message.guild.id] || {};
@@ -1831,7 +1838,7 @@ function setupApplicationSystem() {
         const buttons = createThemeActionRow(
           settings.options.map(opt => 
             createThemeButton(
-              `app_${opt.name.toLowerCase()}`, 
+              `app_${opt.cleanName.toLowerCase()}`, 
               opt.name, 
               opt.emoji
             )
@@ -1890,17 +1897,25 @@ function setupApplicationSystem() {
       }
 
       const roleName = interaction.customId.replace('app_', '');
-      const role = interaction.guild.roles.cache.find(r => r.name.toLowerCase() === roleName);
+      // Find role by name (case insensitive, without @ symbol)
+      const role = interaction.guild.roles.cache.find(r => 
+        r.name.toLowerCase() === roleName.toLowerCase()
+      );
+      
       if (!role) {
         return interaction.editReply({ embeds: [
-          createThemeEmbed('Role Error', 'The role for this application no longer exists.', themeColors.error)
+          createThemeEmbed('Role Error', 
+            `The role "${roleName}" doesn't exist. ` +
+            'Please contact an admin to fix this.', 
+            themeColors.error)
         ]});
       }
 
-      // Store application data
+      // Store application data with role ID and name
       botData.applicationSettings[interaction.user.id] = {
         guildId: interaction.guild.id,
         roleId: role.id,
+        roleName: role.name,
         answers: [],
         currentQuestion: 0
       };
@@ -1991,7 +2006,6 @@ function setupApplicationSystem() {
     try {
       const settings = botData.applicationSettings[appData.guildId];
       const guild = client.guilds.cache.get(appData.guildId);
-      const role = guild.roles.cache.get(appData.roleId);
       const appChannel = guild.channels.cache.get(settings.channelId);
 
       if (!appChannel) {
@@ -2009,7 +2023,7 @@ function setupApplicationSystem() {
 
       // Create application embed
       const appEmbed = createThemeEmbed(
-        `Application for ${role.name}`,
+        `Application for ${appData.roleName}`,
         `Applicant: ${interaction.user.toString()}`,
         themeColors.primary
       )
@@ -2025,7 +2039,7 @@ function setupApplicationSystem() {
 
       // Send application to review channel
       await appChannel.send({ 
-        content: `New application from ${interaction.user.toString()} for ${role.toString()}`,
+        content: `New application from ${interaction.user.toString()} for ${appData.roleName}`,
         embeds: [appEmbed], 
         components: [buttons] 
       });
@@ -2033,7 +2047,7 @@ function setupApplicationSystem() {
       // Notify applicant
       await interaction.user.send({ embeds: [
         createThemeEmbed('Application Submitted', 
-          `Your application for ${role.name} has been submitted successfully.`, themeColors.success)
+          `Your application for ${appData.roleName} has been submitted successfully.`, themeColors.success)
           .setFooter({ 
             text: 'You will be notified when a decision is made.', 
             iconURL: guild.iconURL() 
@@ -2062,7 +2076,8 @@ function setupApplicationSystem() {
         ]});
       }
 
-      const roleName = appEmbed.title.replace('📋 Application for ', '');
+      // Extract role name from the embed title
+      const roleName = appEmbed.title.replace('Application for ', '');
       const role = interaction.guild.roles.cache.find(r => r.name === roleName);
 
       // Accept application
@@ -3271,7 +3286,7 @@ function setupUtilityCommands() {
           { 
             name: '📋 Application System', 
             value: '`!app msg <message>` - Set app panel message\n' +
-                  '`!addoptions @Role:🛡️` - Add role buttons\n' +
+                  '`!addoptions Role:🛡️` - Add role buttons (with or without @)\n' +
                   '`!setappchannel <id>` - Set app channel\n' +
                   '`!deployapp` - Deploy app panel\n' +
                   '`!ques1 <question>` - Set question 1'
