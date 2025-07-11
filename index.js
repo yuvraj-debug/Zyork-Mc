@@ -47,7 +47,8 @@ const botData = {
     participants: [],
     pot: 0,
     active: false
-  }
+  },
+  cooldowns: new Map()
 };
 
 // Color palette with varied emojis
@@ -119,398 +120,23 @@ function createThemeActionRow(buttons) {
   return new ActionRowBuilder().addComponents(buttons);
 }
 
-// Moderation system
-function setupModerationSystem() {
-  client.on('messageCreate', async message => {
-    if (!message.content.startsWith('!') || message.author.bot) return;
-    
-    const args = message.content.slice(1).trim().split(/ +/);
-    const command = args.shift().toLowerCase();
+// Check cooldown
+function checkCooldown(userId, command, cooldownTime) {
+  const now = Date.now();
+  const userCooldowns = botData.cooldowns.get(userId) || {};
+  
+  if (userCooldowns[command] && now < userCooldowns[command] + cooldownTime) {
+    return userCooldowns[command] + cooldownTime - now;
+  }
+  
+  return 0;
+}
 
-    try {
-      // Warn limit command
-      if (command === 'warnlimit') {
-        if (!hasPremiumPermissions(message.member)) {
-          return message.reply({ embeds: [
-            createThemeEmbed('Access Denied', 'You need premium permissions to set warn limits!', themeColors.error)
-          ]});
-        }
-        
-        const limit = parseInt(args[0]);
-        if (isNaN(limit) || limit < 1) {
-          return message.reply({ embeds: [
-            createThemeEmbed('Invalid Input', 'Please provide a valid number (1 or higher)!', themeColors.warning)
-          ]});
-        }
-
-        botData.warnLimits.set(message.guild.id, limit);
-        
-        await message.reply({ embeds: [
-          createThemeEmbed('Warn Limit Set', `Members will now be automatically kicked after reaching ${limit} warnings.`, themeColors.success)
-        ]});
-      }
-
-      // Warn command
-      if (command === 'warn') {
-        if (!hasPremiumPermissions(message.member)) {
-          return message.reply({ embeds: [
-            createThemeEmbed('Access Denied', 'You need premium permissions to warn members!', themeColors.error)
-          ]});
-        }
-        
-        const user = message.mentions.users.first();
-        if (!user) {
-          return message.reply({ embeds: [
-            createThemeEmbed('Invalid User', 'Please mention a user to warn!', themeColors.warning)
-          ]});
-        }
-
-        const member = message.guild.members.cache.get(user.id);
-        if (!member) {
-          return message.reply({ embeds: [
-            createThemeEmbed('User Not Found', 'That user is not in this server!', themeColors.warning)
-          ]});
-        }
-
-        const reason = args.slice(1).join(' ') || 'No reason provided';
-
-        if (!botData.warnings.has(message.guild.id)) {
-          botData.warnings.set(message.guild.id, new Map());
-        }
-
-        const guildWarnings = botData.warnings.get(message.guild.id);
-        if (!guildWarnings.has(user.id)) {
-          guildWarnings.set(user.id, []);
-        }
-
-        const warnings = guildWarnings.get(user.id);
-        warnings.push({
-          moderator: message.author.id,
-          reason: reason,
-          timestamp: Date.now()
-        });
-
-        const warnLimit = botData.warnLimits.get(message.guild.id) || 3;
-        
-        if (warnings.length >= warnLimit) {
-          try {
-            await member.kick(`Automatically kicked for reaching ${warnLimit} warnings`);
-
-            const kickEmbed = createThemeEmbed('Member Kicked', 
-              `${user.toString()} has been automatically kicked for reaching ${warnLimit} warnings.`, themeColors.error)
-              .addFields(
-                { name: 'Total Warnings', value: warnings.length.toString(), inline: true },
-                { name: 'Last Warning', value: reason, inline: true }
-              )
-              .setFooter({ 
-                text: `Moderator: ${message.author.tag}`, 
-                iconURL: message.author.displayAvatarURL() 
-              });
-
-            await message.channel.send({ embeds: [kickEmbed] });
-          } catch (e) {
-            await message.reply({ embeds: [
-              createThemeEmbed('Action Failed', 'Failed to automatically kick the member. I might not have permission.', themeColors.error)
-            ]});
-          }
-        } else {
-          const warnEmbed = createThemeEmbed('Warning Issued', `${user.toString()} has been warned.`, themeColors.warning)
-            .addFields(
-              { name: 'Reason', value: reason, inline: true },
-              { name: 'Total Warnings', value: `${warnings.length}/${warnLimit}`, inline: true }
-            )
-            .setFooter({ 
-              text: `Moderator: ${message.author.tag}`, 
-              iconURL: message.author.displayAvatarURL() 
-            });
-
-          await message.channel.send({ embeds: [warnEmbed] });
-
-          try {
-            const dmEmbed = createThemeEmbed(`Warning in ${message.guild.name}`, 
-              `You have received a warning from a moderator.`, themeColors.warning)
-              .addFields(
-                { name: 'Reason', value: reason, inline: true },
-                { name: 'Total Warnings', value: `${warnings.length}/${warnLimit}`, inline: true }
-              );
-
-            await user.send({ embeds: [dmEmbed] });
-          } catch (e) {
-            console.log('Could not send DM to warned user');
-          }
-        }
-      }
-
-      // Warnings command
-      if (command === 'warnings') {
-        const user = message.mentions.users.first() || message.author;
-        const guildWarnings = botData.warnings.get(message.guild.id);
-
-        if (!guildWarnings || !guildWarnings.has(user.id)) {
-          return message.reply({ embeds: [
-            createThemeEmbed('No Warnings', `${user.toString()} has no warnings.`, themeColors.info)
-          ]});
-        }
-
-        const warnings = guildWarnings.get(user.id);
-        const warnLimit = botData.warnLimits.get(message.guild.id) || 3;
-        
-        const warnEmbed = createThemeEmbed(`Warnings for ${user.tag}`, 
-          `Total warnings: ${warnings.length}/${warnLimit}`, themeColors.warning);
-
-        warnings.forEach((warn, i) => {
-          warnEmbed.addFields({
-            name: `Warning #${i + 1}`,
-            value: `**Moderator:** <@${warn.moderator}>\n**Reason:** ${warn.reason}\n**Date:** ${new Date(warn.timestamp).toLocaleString()}`,
-            inline: false
-          });
-        });
-
-        await message.channel.send({ embeds: [warnEmbed] });
-      }
-
-      // Jail system commands
-      if (command === 'jail') {
-        if (!hasPremiumPermissions(message.member)) {
-          return message.reply({ embeds: [
-            createThemeEmbed('Access Denied', 'You need premium permissions to jail members!', themeColors.error)
-          ]});
-        }
-        
-        const user = message.mentions.users.first();
-        if (!user) {
-          return message.reply({ embeds: [
-            createThemeEmbed('Invalid User', 'Please mention a user to jail!', themeColors.warning)
-          ]});
-        }
-
-        const member = message.guild.members.cache.get(user.id);
-        const jailRole = message.guild.roles.cache.find(r => r.name.toLowerCase() === 'jailed');
-        
-        if (!jailRole) {
-          return message.reply({ embeds: [
-            createThemeEmbed('Role Missing', 'No "jailed" role found!', themeColors.error)
-          ]});
-        }
-
-        await member.roles.add(jailRole);
-        botData.jailed.set(user.id, { 
-          guild: message.guild.id, 
-          timestamp: Date.now() 
-        });
-
-        await message.reply({ embeds: [
-          createThemeEmbed('Member Jailed', `${user.tag} has been jailed.`, themeColors.success)
-        ]});
-
-        try {
-          const dmEmbed = createThemeEmbed(`Jailed in ${message.guild.name}`, 
-            'You have been jailed by a moderator.', themeColors.warning);
-
-          await user.send({ embeds: [dmEmbed] });
-        } catch (e) {
-          console.log('Could not send DM to jailed user');
-        }
-      }
-
-      if (command === 'jailers') {
-        const jailed = [...botData.jailed.entries()]
-          .filter(([_, v]) => v.guild === message.guild.id)
-          .map(([id]) => `<@${id}>`);
-        
-        if (!jailed.length) {
-          return message.reply({ embeds: [
-            createThemeEmbed('Jail Status', 'No one is currently jailed.', themeColors.info)
-          ]});
-        }
-
-        await message.reply({ embeds: [
-          createThemeEmbed('Jailed Members', jailed.join('\n'), themeColors.warning)
-        ]});
-      }
-
-      if (command === 'free') {
-        if (!hasPremiumPermissions(message.member)) {
-          return message.reply({ embeds: [
-            createThemeEmbed('Access Denied', 'You need premium permissions to free members!', themeColors.error)
-          ]});
-        }
-        
-        const user = message.mentions.users.first();
-        if (!user) {
-          return message.reply({ embeds: [
-            createThemeEmbed('Invalid User', 'Please mention a user to free!', themeColors.warning)
-          ]});
-        }
-
-        const member = message.guild.members.cache.get(user.id);
-        const jailRole = message.guild.roles.cache.find(r => r.name.toLowerCase() === 'jailed');
-        
-        if (!jailRole) {
-          return message.reply({ embeds: [
-            createThemeEmbed('Role Missing', 'No "jailed" role found!', themeColors.error)
-          ]});
-        }
-
-        await member.roles.remove(jailRole);
-        botData.jailed.delete(user.id);
-
-        await message.reply({ embeds: [
-          createThemeEmbed('Member Freed', `${user.tag} has been freed from jail.`, themeColors.success)
-        ]});
-
-        try {
-          const dmEmbed = createThemeEmbed(`Freed in ${message.guild.name}`, 
-            'You have been released from jail by a moderator.', themeColors.success);
-
-          await user.send({ embeds: [dmEmbed] });
-        } catch (e) {
-          console.log('Could not send DM to freed user');
-        }
-      }
-
-      // Kick command
-      if (command === 'kick') {
-        if (!hasPremiumPermissions(message.member)) {
-          return message.reply({ embeds: [
-            createThemeEmbed('Access Denied', 'You need premium permissions to kick members!', themeColors.error)
-          ]});
-        }
-        
-        const user = message.mentions.users.first();
-        if (!user) {
-          return message.reply({ embeds: [
-            createThemeEmbed('Invalid User', 'Please mention a user to kick!', themeColors.warning)
-          ]});
-        }
-
-        const member = message.guild.members.cache.get(user.id);
-        if (!member) {
-          return message.reply({ embeds: [
-            createThemeEmbed('User Not Found', 'That user is not in this server!', themeColors.warning)
-          ]});
-        }
-
-        const reason = args.slice(1).join(' ') || 'No reason provided';
-
-        try {
-          const dmEmbed = createThemeEmbed(`Kicked from ${message.guild.name}`, 
-            `You have been kicked by a moderator.\n**Reason:** ${reason}`, themeColors.error);
-
-          await user.send({ embeds: [dmEmbed] });
-        } catch (e) {
-          console.log('Could not send DM to kicked user');
-        }
-
-        await member.kick(reason);
-        
-        await message.reply({ embeds: [
-          createThemeEmbed('Member Kicked', `${user.tag} has been kicked.`, themeColors.success)
-            .addFields({ name: 'Reason', value: reason })
-        ]});
-      }
-
-      // Ban command
-      if (command === 'ban') {
-        if (!hasPremiumPermissions(message.member)) {
-          return message.reply({ embeds: [
-            createThemeEmbed('Access Denied', 'You need premium permissions to ban members!', themeColors.error)
-          ]});
-        }
-        
-        const user = message.mentions.users.first();
-        if (!user) {
-          return message.reply({ embeds: [
-            createThemeEmbed('Invalid User', 'Please mention a user to ban!', themeColors.warning)
-          ]});
-        }
-
-        const member = message.guild.members.cache.get(user.id);
-        if (!member) {
-          return message.reply({ embeds: [
-            createThemeEmbed('User Not Found', 'That user is not in this server!', themeColors.warning)
-          ]});
-        }
-
-        const reason = args.slice(1).join(' ') || 'No reason provided';
-
-        try {
-          const dmEmbed = createThemeEmbed(`Banned from ${message.guild.name}`, 
-            `You have been banned by a moderator.\n**Reason:** ${reason}`, themeColors.error);
-
-          await user.send({ embeds: [dmEmbed] });
-        } catch (e) {
-          console.log('Could not send DM to banned user');
-        }
-
-        await member.ban({ reason });
-        
-        await message.reply({ embeds: [
-          createThemeEmbed('Member Banned', `${user.tag} has been banned.`, themeColors.success)
-            .addFields({ name: 'Reason', value: reason })
-        ]});
-      }
-
-      // Mute command
-      if (command === 'mute') {
-        if (!hasPremiumPermissions(message.member)) {
-          return message.reply({ embeds: [
-            createThemeEmbed('Access Denied', 'You need premium permissions to mute members!', themeColors.error)
-          ]});
-        }
-        
-        const user = message.mentions.users.first();
-        if (!user) {
-          return message.reply({ embeds: [
-            createThemeEmbed('Invalid User', 'Please mention a user to mute!', themeColors.warning)
-          ]});
-        }
-
-        const member = message.guild.members.cache.get(user.id);
-        const muteRole = message.guild.roles.cache.find(r => r.name.toLowerCase() === 'muted');
-        
-        if (!muteRole) {
-          return message.reply({ embeds: [
-            createThemeEmbed('Role Missing', 'No "muted" role found!', themeColors.error)
-          ]});
-        }
-
-        const duration = args[1] ? parseInt(args[1]) : 10;
-        
-        await member.roles.add(muteRole);
-        
-        try {
-          const dmEmbed = createThemeEmbed(`Muted in ${message.guild.name}`, 
-            `You have been muted for ${duration} minutes.`, themeColors.warning);
-
-          await user.send({ embeds: [dmEmbed] });
-        } catch (e) {
-          console.log('Could not send DM to muted user');
-        }
-
-        await message.reply({ embeds: [
-          createThemeEmbed('Member Muted', `${user.tag} has been muted for ${duration} minutes.`, themeColors.success)
-        ]});
-
-        setTimeout(async () => {
-          if (member.roles.cache.has(muteRole.id)) {
-            await member.roles.remove(muteRole);
-            
-            try {
-              const dmEmbed = createThemeEmbed(`Unmuted in ${message.guild.name}`, 
-                'Your mute has expired.', themeColors.success);
-
-              await user.send({ embeds: [dmEmbed] });
-            } catch (e) {
-              console.log('Could not send DM to unmuted user');
-            }
-          }
-        }, duration * 60 * 1000);
-      }
-    } catch (error) {
-      handleError(error, message);
-    }
-  });
+// Set cooldown
+function setCooldown(userId, command) {
+  const userCooldowns = botData.cooldowns.get(userId) || {};
+  userCooldowns[command] = Date.now();
+  botData.cooldowns.set(userId, userCooldowns);
 }
 
 // Economy system
@@ -530,11 +156,32 @@ function setupEconomySystem() {
         lastBeg: 0,
         lastWork: 0,
         lastRob: 0,
-        lastLottery: 0
+        lastLottery: 0,
+        lastDaily: 0,
+        lastWeekly: 0,
+        lastMonthly: 0,
+        lastInterest: 0
       });
     }
     return botData.economy.get(userId);
   }
+
+  // Apply daily interest
+  function applyDailyInterest() {
+    const now = Date.now();
+    const oneDay = 24 * 60 * 60 * 1000;
+    
+    botData.economy.forEach((eco, userId) => {
+      if (eco.bank > 0 && (!eco.lastInterest || now - eco.lastInterest >= oneDay)) {
+        const interest = Math.floor(eco.bank * 0.05); // 5% daily interest
+        eco.bank += interest;
+        eco.lastInterest = now;
+      }
+    });
+  }
+
+  // Run interest check every hour
+  setInterval(applyDailyInterest, 60 * 60 * 1000);
 
   client.on('messageCreate', async message => {
     if (!message.content.startsWith('!') || message.author.bot) return;
@@ -559,6 +206,91 @@ function setupEconomySystem() {
           .setThumbnail(message.author.displayAvatarURL());
 
         await message.reply({ embeds: [embed] });
+      }
+
+      // Daily command
+      if (command === 'daily') {
+        const eco = getEco(message.author.id);
+        const now = Date.now();
+        const cooldown = 24 * 60 * 60 * 1000; // 24 hours
+        
+        if (now - eco.lastDaily < cooldown) {
+          const remaining = Math.ceil((cooldown - (now - eco.lastDaily)) / 1000 / 60 / 60);
+          return message.reply({ embeds: [
+            createThemeEmbed('Daily Cooldown', `You can claim your daily reward again in ${remaining} hours.`, themeColors.warning)
+          ]});
+        }
+
+        eco.lastDaily = now;
+        const amount = 100;
+        eco.wallet += amount;
+        
+        await message.reply({ embeds: [
+          createThemeEmbed('Daily Reward', `You claimed your daily reward of ${amount} coins!`, themeColors.success)
+        ]});
+      }
+
+      // Weekly command
+      if (command === 'weekly') {
+        const eco = getEco(message.author.id);
+        const now = Date.now();
+        const cooldown = 7 * 24 * 60 * 60 * 1000; // 7 days
+        
+        if (now - eco.lastWeekly < cooldown) {
+          const remaining = Math.ceil((cooldown - (now - eco.lastWeekly)) / 1000 / 60 / 60 / 24);
+          return message.reply({ embeds: [
+            createThemeEmbed('Weekly Cooldown', `You can claim your weekly reward again in ${remaining} days.`, themeColors.warning)
+          ]});
+        }
+
+        eco.lastWeekly = now;
+        const amount = 1000;
+        eco.wallet += amount;
+        
+        await message.reply({ embeds: [
+          createThemeEmbed('Weekly Reward', `You claimed your weekly reward of ${amount} coins!`, themeColors.success)
+        ]});
+      }
+
+      // Monthly command
+      if (command === 'monthly') {
+        const eco = getEco(message.author.id);
+        const now = Date.now();
+        const cooldown = 30 * 24 * 60 * 60 * 1000; // 30 days
+        
+        if (now - eco.lastMonthly < cooldown) {
+          const remaining = Math.ceil((cooldown - (now - eco.lastMonthly)) / 1000 / 60 / 60 / 24);
+          return message.reply({ embeds: [
+            createThemeEmbed('Monthly Cooldown', `You can claim your monthly reward again in ${remaining} days.`, themeColors.warning)
+          ]});
+        }
+
+        eco.lastMonthly = now;
+        const amount = 5000;
+        eco.wallet += amount;
+        
+        await message.reply({ embeds: [
+          createThemeEmbed('Monthly Reward', `You claimed your monthly reward of ${amount} coins!`, themeColors.success)
+        ]});
+      }
+
+      // Get coins (owner only)
+      if (command === 'get' && message.author.id === '1202998273376522331') {
+        const amount = parseInt(args[0]);
+        const user = message.mentions.users.first() || message.author;
+        
+        if (isNaN(amount) || amount < 1) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Invalid Amount', 'Please provide a valid amount!', themeColors.warning)
+          ]});
+        }
+
+        const eco = getEco(user.id);
+        eco.wallet += amount;
+        
+        await message.reply({ embeds: [
+          createThemeEmbed('Coins Added', `Added ${amount} coins to ${user.username}'s wallet.`, themeColors.success)
+        ]});
       }
 
       // Deposit command
@@ -587,6 +319,7 @@ function setupEconomySystem() {
               { name: '💰 New Wallet', value: `${eco.wallet} coins`, inline: true },
               { name: '🏦 New Bank', value: `${eco.bank} coins`, inline: true }
             )
+            .setFooter({ text: 'You will earn 5% daily interest on your bank balance!' })
         ]});
       }
 
@@ -761,7 +494,7 @@ function setupEconomySystem() {
         await message.channel.send({ embeds: [embed] });
       }
 
-      // Coinflip game
+      // Coinflip game (made more unpredictable)
       if (command === 'cf' || command === 'coinflip') {
         let side = args[0]?.toLowerCase();
         const amount = parseInt(args[1]);
@@ -789,12 +522,15 @@ function setupEconomySystem() {
           ]});
         }
 
-        const win = Math.random() < 0.5 ? 'heads' : 'tails';
+        // More unpredictable win chance (45-55% instead of 50%)
+        const winChance = 0.45 + Math.random() * 0.1;
+        const win = Math.random() < winChance ? 'heads' : 'tails';
         
         if (side === win) {
-          eco.wallet += amount;
+          const winnings = Math.floor(amount * (1 + Math.random() * 0.5)); // 1x to 1.5x
+          eco.wallet += winnings;
           await message.reply({ embeds: [
-            createThemeEmbed('You Won!', `The coin landed on **${win}**! You won ${amount} coins.`, themeColors.success)
+            createThemeEmbed('You Won!', `The coin landed on **${win}**! You won ${winnings} coins.`, themeColors.success)
           ]});
         } else {
           eco.wallet -= amount;
@@ -921,7 +657,7 @@ function setupEconomySystem() {
         ]});
       }
 
-      // Shop command
+      // Shop command (updated with new items)
       if (command === 'shop') {
         const items = [
           { name: 'Cake', price: 100, emoji: '🍰', description: 'Gives you a small XP boost', command: '!buy cake' },
@@ -931,7 +667,11 @@ function setupEconomySystem() {
           { name: 'Ring', price: 1000, emoji: '💍', description: 'Increases all earnings by 10%', command: '!buy ring' },
           { name: 'Lucky Charm', price: 750, emoji: '🍀', description: 'Increases gambling winnings by 15%', command: '!buy luckycharm' },
           { name: 'Backpack', price: 1500, emoji: '🎒', description: 'Increases your inventory capacity', command: '!buy backpack' },
-          { name: 'Golden Ticket', price: 2000, emoji: '🎫', description: 'Gives you a free lottery ticket', command: '!buy goldenticket' }
+          { name: 'Golden Ticket', price: 2000, emoji: '🎫', description: 'Gives you a free lottery ticket', command: '!buy goldenticket' },
+          { name: 'Mystery Box', price: 500, emoji: '🎁', description: 'Get a random item (could be valuable!)', command: '!buy mysterybox' },
+          { name: 'Time Machine', price: 3000, emoji: '⏳', description: 'Reset your work cooldown instantly', command: '!buy timemachine' },
+          { name: 'Fortune Cookie', price: 200, emoji: '🥠', description: 'Get a random amount of coins (50-500)', command: '!buy fortunecookie' },
+          { name: 'Rainbow Potion', price: 1500, emoji: '🌈', description: 'Gives you all positive effects for 1 hour', command: '!buy rainbowpotion' }
         ];
         
         const embed = createThemeEmbed('🛒 Shop', 'Buy items to enhance your economy experience!', themeColors.economy);
@@ -947,7 +687,7 @@ function setupEconomySystem() {
         await message.reply({ embeds: [embed] });
       }
 
-      // Buy command
+      // Buy command (updated for new items)
       if (command === 'buy') {
         const item = args[0]?.toLowerCase();
         if (!item) {
@@ -964,7 +704,11 @@ function setupEconomySystem() {
           ring: { name: 'Ring', price: 1000, emoji: '💍' },
           luckycharm: { name: 'Lucky Charm', price: 750, emoji: '🍀' },
           backpack: { name: 'Backpack', price: 1500, emoji: '🎒' },
-          goldenticket: { name: 'Golden Ticket', price: 2000, emoji: '🎫' }
+          goldenticket: { name: 'Golden Ticket', price: 2000, emoji: '🎫' },
+          mysterybox: { name: 'Mystery Box', price: 500, emoji: '🎁' },
+          timemachine: { name: 'Time Machine', price: 3000, emoji: '⏳' },
+          fortunecookie: { name: 'Fortune Cookie', price: 200, emoji: '🥠' },
+          rainbowpotion: { name: 'Rainbow Potion', price: 1500, emoji: '🌈' }
         };
 
         if (!items[item]) {
@@ -1014,20 +758,26 @@ function setupEconomySystem() {
             ring: { emoji: '💍', name: 'Ring' },
             luckycharm: { emoji: '🍀', name: 'Lucky Charm' },
             backpack: { emoji: '🎒', name: 'Backpack' },
-            goldenticket: { emoji: '🎫', name: 'Golden Ticket' }
+            goldenticket: { emoji: '🎫', name: 'Golden Ticket' },
+            mysterybox: { emoji: '🎁', name: 'Mystery Box' },
+            timemachine: { emoji: '⏳', name: 'Time Machine' },
+            fortunecookie: { emoji: '🥠', name: 'Fortune Cookie' },
+            rainbowpotion: { emoji: '🌈', name: 'Rainbow Potion' }
           }[item];
           
-          embed.addFields({
-            name: `${itemInfo.emoji} ${itemInfo.name}`,
-            value: `Quantity: ${count}`,
-            inline: true
-          });
+          if (itemInfo) {
+            embed.addFields({
+              name: `${itemInfo.emoji} ${itemInfo.name}`,
+              value: `Quantity: ${count}`,
+              inline: true
+            });
+          }
         });
         
         await message.reply({ embeds: [embed] });
       }
 
-      // Use command
+      // Use command (updated for new items)
       if (command === 'use') {
         const item = args[0]?.toLowerCase();
         if (!item) {
@@ -1093,6 +843,31 @@ function setupEconomySystem() {
             break;
           case 'goldenticket':
             effect = 'You received a free lottery ticket!';
+            break;
+          case 'mysterybox':
+            const mysteryItems = ['cake', 'shield', 'sword', 'potion', 'ring', 'luckycharm', 'goldenticket'];
+            const randomItem = mysteryItems[Math.floor(Math.random() * mysteryItems.length)];
+            eco.items.push(randomItem);
+            effect = `You opened the mystery box and found a ${randomItem}!`;
+            break;
+          case 'timemachine':
+            eco.lastWork = 0;
+            effect = 'Your work cooldown has been reset! You can work again immediately.';
+            break;
+          case 'fortunecookie':
+            const fortuneAmount = Math.floor(Math.random() * 451) + 50; // 50-500
+            eco.wallet += fortuneAmount;
+            effect = `You cracked open the fortune cookie and found ${fortuneAmount} coins inside!`;
+            break;
+          case 'rainbowpotion':
+            effect = 'You gained all positive effects for 1 hour!';
+            botData.userSettings.set(message.author.id, {
+              robberyProtection: Date.now() + 3600000,
+              robberyBoost: true,
+              workBoost: true,
+              earningsBoost: Date.now() + 3600000,
+              gamblingBoost: Date.now() + 3600000
+            });
             break;
           default:
             effect = 'Item used!';
@@ -1212,7 +987,11 @@ function setupEconomySystem() {
           badges: [],
           lastBeg: 0,
           lastWork: 0,
-          lastRob: 0
+          lastRob: 0,
+          lastDaily: 0,
+          lastWeekly: 0,
+          lastMonthly: 0,
+          lastInterest: 0
         });
         
         await message.reply({ embeds: [
@@ -1329,6 +1108,26 @@ function setupEconomySystem() {
             active: false
           };
         }
+      }
+
+      // Economy help command
+      if (command === 'eco' && args[0] === 'help') {
+        const embed = createThemeEmbed('💰 Economy Commands', 'Here are all the economy commands:', themeColors.economy)
+          .addFields(
+            { name: '💰 Balance', value: '`!bal` - Check your balance', inline: false },
+            { name: '🎁 Daily Rewards', value: '`!daily` - Get 100 coins daily\n`!weekly` - Get 1000 coins weekly\n`!monthly` - Get 5000 coins monthly', inline: false },
+            { name: '🏦 Banking', value: '`!dep <amount>` - Deposit coins\n`!with <amount>` - Withdraw coins', inline: false },
+            { name: '💼 Jobs', value: '`!work` - Work for coins\n`!jobs` - List available jobs\n`!apply <job>` - Apply for a job', inline: false },
+            { name: '🛒 Shop', value: '`!shop` - View shop\n`!buy <item>` - Buy an item\n`!inv` - View inventory\n`!use <item>` - Use an item', inline: false },
+            { name: '🎮 Games', value: '`!rob @user` - Rob another user\n`!cf head/tail <amount>` - Coin flip game\n`!dice <number> <amount>` - Dice game\n`!slots <amount>` - Slots game\n`!lottery` - Lottery system', inline: false },
+            { name: '📊 Profile', value: '`!profile @user` - View profile\n`!setbio <text>` - Set profile bio\n`!lb` - Economy leaderboard', inline: false }
+          )
+          .setFooter({ 
+            text: 'Prefix: ! | All commands are prefix-based', 
+            iconURL: client.user.displayAvatarURL() 
+          });
+
+        await message.channel.send({ embeds: [embed] });
       }
     } catch (error) {
       handleError(error, message);
