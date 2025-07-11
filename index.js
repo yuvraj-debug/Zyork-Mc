@@ -2,7 +2,7 @@ require('dotenv').config();
 const { Client, IntentsBitField, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, PermissionFlagsBits, StringSelectMenuBuilder, Collection, Events } = require('discord.js');
 const http = require('http');
 
-// Initialize client with required intents
+// Initialize client with all required intents
 const client = new Client({
   intents: [
     IntentsBitField.Flags.Guilds,
@@ -14,7 +14,7 @@ const client = new Client({
   ]
 });
 
-// Keep alive server with Render.com compatibility
+// Keep alive server for hosting platforms
 const server = http.createServer((req, res) => {
   if (req.url === '/health') {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -26,32 +26,58 @@ const server = http.createServer((req, res) => {
 
 const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
-  console.log(`Keep-alive server is running on port ${PORT}`);
+  console.log(`Keep-alive server running on port ${PORT}`);
   console.log(`Server started at ${new Date().toISOString()}`);
 });
 
-server.on('error', (error) => {
-  console.error('Server error:', error);
-});
+server.on('error', (error) => console.error('Server error:', error));
 
-// Data storage
+// Data storage for all bot functions
 const botData = {
   ticketSettings: {},
   applicationSettings: {},
   warnings: new Map(),
   warnLimits: new Map(),
   games: new Map(),
-  premiumRoles: new Map()
+  premiumRoles: new Map(),
+  jailed: new Map(),
+  economy: new Map(),
+  userSettings: new Map(),
+  lottery: {
+    participants: [],
+    pot: 0,
+    active: false
+  }
 };
 
-// Error handler with colorful embeds
+// Color palette with varied emojis
+const themeColors = {
+  primary: '#5865F2',     // Blurple
+  secondary: '#57F287',   // Green
+  accent: '#FEE75C',      // Yellow
+  dark: '#EB459E',        // Pink
+  light: '#ED4245',       // Red
+  error: '#ED4245',       // Red
+  success: '#57F287',     // Green
+  warning: '#FEE75C',     // Yellow
+  info: '#5865F2',        // Blurple
+  economy: '#F47FFF',     // Purple
+  moderation: '#FF7F7F',  // Light red
+  games: '#7FFF7F',       // Light green
+  utility: '#7F7FFF'      // Light blue
+};
+
+// Enhanced error handler
 function handleError(error, interaction) {
   console.error(error);
   const errorEmbed = new EmbedBuilder()
-    .setColor('#FF0000')
+    .setColor(themeColors.error)
     .setTitle('❌ Error Occurred')
     .setDescription(`\`\`\`${error.message || 'An unknown error occurred'}\`\`\``)
-    .setFooter({ text: 'Please try again or contact support if the issue persists' });
+    .setFooter({ 
+      text: 'Please try again or contact support', 
+      iconURL: 'https://emojicdn.elk.sh/❌' 
+    });
 
   if (interaction.replied || interaction.deferred) {
     interaction.editReply({ embeds: [errorEmbed] }).catch(console.error);
@@ -60,685 +86,91 @@ function handleError(error, interaction) {
   }
 }
 
-// Check if user has premium permissions
+// Premium permission check
 function hasPremiumPermissions(member) {
   if (member.permissions.has(PermissionFlagsBits.Administrator)) return true;
   const premiumRoles = botData.premiumRoles.get(member.guild.id) || [];
   return premiumRoles.some(roleId => member.roles.cache.has(roleId));
 }
 
-// Ticket system
-function setupTicketSystem() {
-  client.on('messageCreate', async message => {
-    if (!message.content.startsWith('!') || message.author.bot) return;
-
-    const args = message.content.slice(1).trim().split(/ +/);
-    const command = args.shift().toLowerCase();
-
-    try {
-      if (command === 'ticket' && args[0] === 'msg') {
-        if (!hasPremiumPermissions(message.member)) {
-          return message.reply('❌ You need premium permissions to set up tickets!');
-        }
-        const ticketMsg = args.slice(1).join(' ');
-        botData.ticketSettings[message.guild.id] = botData.ticketSettings[message.guild.id] || {};
-        botData.ticketSettings[message.guild.id].message = ticketMsg;
-
-        const successEmbed = new EmbedBuilder()
-          .setColor('#00FF00')
-          .setTitle('✅ Ticket Message Set!')
-          .setDescription('The ticket panel message has been successfully configured.')
-          .addFields({ name: 'Message', value: ticketMsg || 'Not provided' });
-
-        message.reply({ embeds: [successEmbed] });
-      }
-
-      if (command === 'setoptions') {
-        if (!hasPremiumPermissions(message.member)) {
-          return message.reply('❌ You need premium permissions to set ticket options!');
-        }
-        const options = args.join(' ').split(',').map(opt => opt.trim());
-        const formattedOptions = options.map(opt => {
-          const [name, emoji] = opt.split(':').map(part => part.trim());
-          return { name, emoji };
-        });
-
-        botData.ticketSettings[message.guild.id] = botData.ticketSettings[message.guild.id] || {};
-        botData.ticketSettings[message.guild.id].options = formattedOptions;
-
-        const successEmbed = new EmbedBuilder()
-          .setColor('#00FF00')
-          .setTitle('✅ Ticket Options Set!')
-          .setDescription('The ticket dropdown options have been configured.')
-          .addFields(
-            { name: 'Options', value: formattedOptions.map(opt => `${opt.emoji} ${opt.name}`).join('\n') }
-          );
-
-        message.reply({ embeds: [successEmbed] });
-      }
-
-      if (command === 'setviewer') {
-        if (!hasPremiumPermissions(message.member)) {
-          return message.reply('❌ You need premium permissions to set ticket viewers!');
-        }
-        const role = message.mentions.roles.first();
-        if (!role) return message.reply('❌ Please mention a valid role!');
-
-        botData.ticketSettings[message.guild.id] = botData.ticketSettings[message.guild.id] || {};
-        botData.ticketSettings[message.guild.id].viewerRole = role.id;
-
-        const successEmbed = new EmbedBuilder()
-          .setColor('#00FF00')
-          .setTitle('✅ Ticket Viewer Role Set!')
-          .setDescription(`The role ${role.name} can now view all ticket channels.`);
-
-        message.reply({ embeds: [successEmbed] });
-      }
-
-      if (command === 'setticketcategory') {
-        if (!hasPremiumPermissions(message.member)) {
-          return message.reply('❌ You need premium permissions to set the ticket category!');
-        }
-        const categoryId = args[0];
-        if (!categoryId) return message.reply('❌ Please provide a valid category ID!');
-
-        botData.ticketSettings[message.guild.id] = botData.ticketSettings[message.guild.id] || {};
-        botData.ticketSettings[message.guild.id].categoryId = categoryId;
-
-        const successEmbed = new EmbedBuilder()
-          .setColor('#00FF00')
-          .setTitle('✅ Ticket Category Set!')
-          .setDescription(`New tickets will be created under category ID: ${categoryId}`);
-
-        message.reply({ embeds: [successEmbed] });
-      }
-
-      if (command === 'deployticketpanel') {
-        if (!hasPremiumPermissions(message.member)) {
-          return message.reply('❌ You need premium permissions to deploy ticket panels!');
-        }
-        const settings = botData.ticketSettings[message.guild.id];
-        if (!settings || !settings.message || !settings.options) {
-          return message.reply('❌ Please set up ticket message and options first!');
-        }
-
-        const selectMenu = new ActionRowBuilder().addComponents(
-          new StringSelectMenuBuilder()
-            .setCustomId('ticket_type')
-            .setPlaceholder('Select a ticket type')
-            .addOptions(settings.options.map(opt => ({
-              label: opt.name,
-              value: opt.name.toLowerCase(),
-              emoji: opt.emoji
-            })))
-        );
-
-        const embed = new EmbedBuilder()
-          .setColor('#5865F2')
-          .setTitle('🎟️ Create a Ticket')
-          .setDescription(settings.message)
-          .setFooter({ text: `${message.guild.name} Ticket System`, iconURL: message.guild.iconURL() });
-
-        await message.channel.send({ embeds: [embed], components: [selectMenu] });
-        await message.reply('✅ Ticket panel deployed successfully!').then(msg => setTimeout(() => msg.delete(), 5000));
-      }
-    } catch (error) {
-      handleError(error, message);
-    }
-  });
-
-  client.on('interactionCreate', async interaction => {
-    if (!interaction.isStringSelectMenu() || interaction.customId !== 'ticket_type') return;
-
-    try {
-      await interaction.deferReply({ ephemeral: true });
-      const settings = botData.ticketSettings[interaction.guild.id];
-      if (!settings) {
-        return interaction.editReply('❌ Ticket system not configured properly on this server.');
-      }
-
-      const ticketType = interaction.values[0];
-      const ticketName = `ticket-${ticketType}-${interaction.user.username}-${Date.now().toString().slice(-4)}`;
-      const category = interaction.guild.channels.cache.get(settings.categoryId);
-
-      if (!category || category.type !== ChannelType.GuildCategory) {
-        return interaction.editReply('❌ Ticket category not found or invalid. Contact server admin.');
-      }
-
-      const ticketChannel = await interaction.guild.channels.create({
-        name: ticketName,
-        type: ChannelType.GuildText,
-        parent: category.id,
-        permissionOverwrites: [
-          {
-            id: interaction.guild.id,
-            deny: [PermissionFlagsBits.ViewChannel]
-          },
-          {
-            id: interaction.user.id,
-            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages]
-          },
-          ...(settings.viewerRole ? [{
-            id: settings.viewerRole,
-            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages]
-          }] : [])
-        ]
-      });
-
-      const buttons = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId('claim_ticket')
-          .setLabel('Claim')
-          .setEmoji({ name: '🔒' })
-          .setStyle(ButtonStyle.Primary),
-        new ButtonBuilder()
-          .setCustomId('lock_ticket')
-          .setLabel('Lock')
-          .setEmoji({ name: '🔐' })
-          .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-          .setCustomId('close_ticket')
-          .setLabel('Close')
-          .setEmoji({ name: '❌' })
-          .setStyle(ButtonStyle.Danger)
-      );
-
-      const welcomeEmbed = new EmbedBuilder()
-        .setColor('#5865F2')
-        .setTitle(`🎟️ ${ticketType.charAt(0).toUpperCase() + ticketType.slice(1)} Ticket`)
-        .setDescription(`Hello ${interaction.user.toString()}! Support will be with you shortly.\n\nPlease describe your issue in detail.`)
-        .addFields(
-          { name: 'Ticket Type', value: ticketType, inline: true },
-          { name: 'Created By', value: interaction.user.toString(), inline: true }
-        )
-        .setFooter({ text: `${interaction.guild.name} Ticket System`, iconURL: interaction.guild.iconURL() });
-
-      await ticketChannel.send({ 
-        content: `${interaction.user.toString()} ${settings.viewerRole ? `<@&${settings.viewerRole}>` : ''}`,
-        embeds: [welcomeEmbed], 
-        components: [buttons] 
-      });
-
-      const successEmbed = new EmbedBuilder()
-        .setColor('#00FF00')
-        .setTitle('✅ Ticket Created!')
-        .setDescription(`Your ticket has been created: ${ticketChannel.toString()}`);
-
-      await interaction.editReply({ embeds: [successEmbed] });
-    } catch (error) {
-      handleError(error, interaction);
-    }
-  });
-
-  client.on('interactionCreate', async interaction => {
-    if (!interaction.isButton() || !interaction.channel?.name?.startsWith('ticket-')) return;
-
-    try {
-      const ticketChannel = interaction.channel;
-      const ticketName = ticketChannel.name;
-      const ticketType = ticketName.split('-')[1];
-      const creatorId = ticketChannel.permissionOverwrites.cache.find(ow => ow.type === 1)?.id;
-      const creator = await client.users.fetch(creatorId).catch(() => null);
-
-      if (interaction.customId === 'claim_ticket') {
-        if (!hasPremiumPermissions(interaction.member)) {
-          return interaction.reply({ content: '❌ You need premium permissions to claim tickets!', ephemeral: true });
-        }
-
-        await ticketChannel.permissionOverwrites.edit(interaction.user.id, {
-          ViewChannel: true,
-          SendMessages: true
-        });
-
-        const claimEmbed = new EmbedBuilder()
-          .setColor('#FFA500')
-          .setTitle('🔒 Ticket Claimed')
-          .setDescription(`This ticket has been claimed by ${interaction.user.toString()}`)
-          .setFooter({ text: 'Please wait for their response', iconURL: interaction.user.displayAvatarURL() });
-
-        await interaction.reply({ embeds: [claimEmbed] });
-      }
-
-      if (interaction.customId === 'lock_ticket') {
-        if (!hasPremiumPermissions(interaction.member)) {
-          return interaction.reply({ content: '❌ You need premium permissions to lock tickets!', ephemeral: true });
-        }
-
-        await ticketChannel.permissionOverwrites.edit(creatorId, {
-          SendMessages: false
-        });
-
-        const lockEmbed = new EmbedBuilder()
-          .setColor('#FFFF00')
-          .setTitle('🔐 Ticket Locked')
-          .setDescription(`This ticket has been locked by ${interaction.user.toString()}`)
-          .setFooter({ text: 'Only staff can send messages now', iconURL: interaction.user.displayAvatarURL() });
-
-        await interaction.reply({ embeds: [lockEmbed] });
-      }
-
-      if (interaction.customId === 'close_ticket') {
-        if (!hasPremiumPermissions(interaction.member)) {
-          return interaction.reply({ content: '❌ You need premium permissions to close tickets!', ephemeral: true });
-        }
-
-        const closeEmbed = new EmbedBuilder()
-          .setColor('#FF0000')
-          .setTitle('❌ Closing Ticket')
-          .setDescription('This ticket will be closed in 10 seconds...')
-          .setFooter({ text: 'A transcript will be sent to the creator', iconURL: interaction.guild.iconURL() });
-
-        await interaction.reply({ embeds: [closeEmbed] });
-
-        setTimeout(async () => {
-          try {
-            const channel = await interaction.guild.channels.fetch(ticketChannel.id).catch(() => null);
-            if (!channel) {
-              console.log(`Ticket channel ${ticketChannel.id} already deleted`);
-              return;
-            }
-
-            const dmEmbed = new EmbedBuilder()
-              .setColor('#00FF00')
-              .setAuthor({ name: interaction.guild.name, iconURL: interaction.guild.iconURL() })
-              .setTitle('Ticket Closed')
-              .addFields(
-                { name: '🆔 Ticket ID', value: ticketChannel.id, inline: true },
-                { name: '🟢 Opened By', value: creator?.toString() || 'Unknown', inline: true },
-                { name: '🔴 Closed By', value: interaction.user.toString(), inline: true },
-                { name: '⏰ Open Time', value: new Date(ticketChannel.createdTimestamp).toLocaleDateString('en-GB'), inline: true },
-                { name: '🔐 Claimed By', value: 'Not claimed', inline: true },
-                { name: '📄 Reason', value: 'No reason specified', inline: true },
-                { name: '🕓 Closed At', value: new Date().toLocaleDateString('en-GB'), inline: true }
-              )
-              .setThumbnail(interaction.guild.iconURL());
-
-            try {
-              if (creator) await creator.send({ embeds: [dmEmbed] });
-            } catch (e) {
-              console.log('Could not send DM to ticket creator');
-            }
-
-            await ticketChannel.delete('Ticket closed by staff').catch(e => {
-              console.error(`Failed to delete ticket channel ${ticketChannel.id}:`, e);
-            });
-          } catch (error) {
-            console.error('Error in ticket closing process:', error);
-          }
-        }, 10000);
-      }
-    } catch (error) {
-      handleError(error, interaction);
-    }
-  });
+// Theme embed builder
+function createThemeEmbed(title, description, color = themeColors.primary) {
+  return new EmbedBuilder()
+    .setColor(color)
+    .setTitle(`${title}`)
+    .setDescription(description)
+    .setFooter({ 
+      text: `${client.user.username} • ${new Date().toLocaleString()}`, 
+      iconURL: client.user.displayAvatarURL() 
+    });
 }
 
-// Application system
-function setupApplicationSystem() {
-  client.on('messageCreate', async message => {
-    if (!message.content.startsWith('!') || message.author.bot) return;
-
-    const args = message.content.slice(1).trim().split(/ +/);
-    const command = args.shift().toLowerCase();
-
-    try {
-      if (command === 'app' && args[0] === 'msg') {
-        if (!hasPremiumPermissions(message.member)) {
-          return message.reply('❌ You need premium permissions to set up applications!');
-        }
-        const appMsg = args.slice(1).join(' ');
-        botData.applicationSettings[message.guild.id] = botData.applicationSettings[message.guild.id] || {};
-        botData.applicationSettings[message.guild.id].message = appMsg;
-
-        const successEmbed = new EmbedBuilder()
-          .setColor('#00FF00')
-          .setTitle('✅ Application Message Set!')
-          .setDescription('The application panel message has been successfully configured.')
-          .addFields({ name: 'Message', value: appMsg || 'Not provided' });
-
-        message.reply({ embeds: [successEmbed] });
-      }
-
-      if (command === 'addoptions') {
-        if (!hasPremiumPermissions(message.member)) {
-          return message.reply('❌ You need premium permissions to set application options!');
-        }
-        const options = args.join(' ').split(',').map(opt => opt.trim());
-        const formattedOptions = options.map(opt => {
-          const [name, emoji] = opt.split(':').map(part => part.trim());
-          return { name, emoji };
-        });
-
-        botData.applicationSettings[message.guild.id] = botData.applicationSettings[message.guild.id] || {};
-        botData.applicationSettings[message.guild.id].options = formattedOptions;
-
-        const successEmbed = new EmbedBuilder()
-          .setColor('#00FF00')
-          .setTitle('✅ Application Options Set!')
-          .setDescription('The application role buttons have been configured.')
-          .addFields(
-            { name: 'Options', value: formattedOptions.map(opt => `${opt.emoji} ${opt.name}`).join('\n') }
-          );
-
-        message.reply({ embeds: [successEmbed] });
-      }
-
-      if (command === 'setappchannel') {
-        if (!hasPremiumPermissions(message.member)) {
-          return message.reply('❌ You need premium permissions to set the application channel!');
-        }
-        const channelId = args[0];
-        if (!channelId) return message.reply('❌ Please provide a valid channel ID!');
-
-        botData.applicationSettings[message.guild.id] = botData.applicationSettings[message.guild.id] || {};
-        botData.applicationSettings[message.guild.id].channelId = channelId;
-
-        const successEmbed = new EmbedBuilder()
-          .setColor('#00FF00')
-          .setTitle('✅ Application Channel Set!')
-          .setDescription(`New applications will be sent to channel ID: ${channelId}`);
-
-        message.reply({ embeds: [successEmbed] });
-      }
-
-      if (command === 'deployapp') {
-        if (!hasPremiumPermissions(message.member)) {
-          return message.reply('❌ You need premium permissions to deploy application panels!');
-        }
-        const settings = botData.applicationSettings[message.guild.id];
-        if (!settings || !settings.message || !settings.options) {
-          return message.reply('❌ Please set up application message and options first!');
-        }
-
-        const buttons = new ActionRowBuilder().addComponents(
-          settings.options.map(opt => 
-            new ButtonBuilder()
-              .setCustomId(`app_${opt.name.toLowerCase()}`)
-              .setLabel(opt.name)
-              .setEmoji({ name: opt.emoji })
-              .setStyle(ButtonStyle.Primary)
-          )
-        );
-
-        const embed = new EmbedBuilder()
-          .setColor('#5865F2')
-          .setTitle('📋 Application System')
-          .setDescription(settings.message)
-          .setFooter({ text: `${message.guild.name} Applications`, iconURL: message.guild.iconURL() });
-
-        await message.channel.send({ embeds: [embed], components: [buttons] });
-        await message.reply('✅ Application panel deployed successfully!').then(msg => setTimeout(() => msg.delete(), 5000));
-      }
-
-      if (command.startsWith('ques')) {
-        const questionNum = parseInt(command.replace('ques', ''));
-        if (isNaN(questionNum)) return;
-
-        if (!hasPremiumPermissions(message.member)) {
-          return message.reply('❌ You need premium permissions to set application questions!');
-        }
-
-        const question = args.join(' ');
-        botData.applicationSettings[message.guild.id] = botData.applicationSettings[message.guild.id] || {};
-        botData.applicationSettings[message.guild.id].questions = botData.applicationSettings[message.guild.id].questions || [];
-        botData.applicationSettings[message.guild.id].questions[questionNum - 1] = question;
-
-        const successEmbed = new EmbedBuilder()
-          .setColor('#00FF00')
-          .setTitle(`✅ Question ${questionNum} Set!`)
-          .setDescription('This question will be asked to applicants.')
-          .addFields({ name: 'Question', value: question });
-
-        message.reply({ embeds: [successEmbed] });
-      }
-    } catch (error) {
-      handleError(error, message);
-    }
-  });
-
-  client.on('interactionCreate', async interaction => {
-    if (!interaction.isButton() || !interaction.customId.startsWith('app_')) return;
-
-    try {
-      await interaction.deferReply({ ephemeral: true });
-      const settings = botData.applicationSettings[interaction.guild.id];
-      if (!settings || !settings.questions || settings.questions.length === 0) {
-        return interaction.editReply('❌ Application system not properly configured on this server.');
-      }
-
-      const roleName = interaction.customId.replace('app_', '');
-      const role = interaction.guild.roles.cache.find(r => r.name.toLowerCase() === roleName);
-      if (!role) {
-        return interaction.editReply('❌ The role for this application no longer exists.');
-      }
-
-      botData.applicationSettings[interaction.user.id] = {
-        guildId: interaction.guild.id,
-        roleId: role.id,
-        answers: [],
-        currentQuestion: 0
-      };
-
-      try {
-        const questionEmbed = new EmbedBuilder()
-          .setColor('#5865F2')
-          .setTitle(`📋 Application for ${role.name}`)
-          .setDescription(settings.questions[0])
-          .setFooter({ text: 'Reply with your answer. Type "cancel" to stop.', iconURL: interaction.guild.iconURL() });
-
-        await interaction.user.send({ embeds: [questionEmbed] });
-        await interaction.editReply({ content: '✅ Check your DMs for the first question!' });
-      } catch (e) {
-        return interaction.editReply('❌ I couldn\'t send you a DM. Please enable DMs and try again.');
-      }
-
-      const filter = m => m.author.id === interaction.user.id && m.channel.type === ChannelType.DM;
-      const collector = interaction.client.channels.cache
-        .find(c => c.type === ChannelType.DM && c.recipient?.id === interaction.user.id)
-        ?.createMessageCollector({ filter, time: 600000 });
-
-      if (!collector) {
-        return interaction.editReply('❌ Failed to set up question collector. Please try again.');
-      }
-
-      collector.on('collect', async m => {
-        if (m.content.toLowerCase() === 'cancel') {
-          collector.stop();
-          await interaction.user.send('❌ Application cancelled.');
-          delete botData.applicationSettings[interaction.user.id];
-          return;
-        }
-
-        const appData = botData.applicationSettings[interaction.user.id];
-        appData.answers.push(m.content);
-        appData.currentQuestion++;
-
-        if (appData.currentQuestion < settings.questions.length) {
-          const nextQuestionEmbed = new EmbedBuilder()
-            .setColor('#5865F2')
-            .setTitle(`📋 Question ${appData.currentQuestion + 1}`)
-            .setDescription(settings.questions[appData.currentQuestion])
-            .setFooter({ text: 'Reply with your answer. Type "cancel" to stop.', iconURL: interaction.guild.iconURL() });
-
-          await interaction.user.send({ embeds: [nextQuestionEmbed] });
-        } else {
-          collector.stop();
-          await submitApplication(interaction, appData);
-        }
-      });
-
-      collector.on('end', (collected, reason) => {
-        if (reason === 'time') {
-          interaction.user.send('⏰ Application timed out due to inactivity.').catch(() => {});
-        }
-        delete botData.applicationSettings[interaction.user.id];
-      });
-    } catch (error) {
-      handleError(error, interaction);
-    }
-  });
-
-  async function submitApplication(interaction, appData) {
-    try {
-      const settings = botData.applicationSettings[appData.guildId];
-      const guild = client.guilds.cache.get(appData.guildId);
-      const role = guild.roles.cache.get(appData.roleId);
-      const appChannel = guild.channels.cache.get(settings.channelId);
-
-      if (!appChannel) {
-        await interaction.user.send('❌ Application channel not found. Contact server admin.');
-        return;
-      }
-
-      const buttons = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId('accept_app')
-          .setLabel('Accept')
-          .setEmoji({ name: '✅' })
-          .setStyle(ButtonStyle.Success),
-        new ButtonBuilder()
-          .setCustomId('reject_app')
-          .setLabel('Reject')
-          .setEmoji({ name: '❌' })
-          .setStyle(ButtonStyle.Danger)
-      );
-
-      const appEmbed = new EmbedBuilder()
-        .setColor('#5865F2')
-        .setTitle(`📋 Application for ${role.name}`)
-        .setDescription(`Applicant: ${interaction.user.toString()}`)
-        .setThumbnail(interaction.user.displayAvatarURL());
-
-      settings.questions.forEach((question, i) => {
-        appEmbed.addFields({ name: `❓ ${question}`, value: appData.answers[i] || 'No answer provided' });
-      });
-
-      await appChannel.send({ 
-        content: `New application from ${interaction.user.toString()} for ${role.toString()}`,
-        embeds: [appEmbed], 
-        components: [buttons] 
-      });
-
-      const successEmbed = new EmbedBuilder()
-        .setColor('#00FF00')
-        .setTitle('✅ Application Submitted!')
-        .setDescription(`Your application for ${role.name} has been submitted successfully.`)
-        .setFooter({ text: 'You will be notified when a decision is made.', iconURL: guild.iconURL() });
-
-      await interaction.user.send({ embeds: [successEmbed] });
-    } catch (error) {
-      handleError(error, interaction);
-    }
-  }
-
-  client.on('interactionCreate', async interaction => {
-    if (!interaction.isButton() || !['accept_app', 'reject_app'].includes(interaction.customId)) return;
-    if (!interaction.message.embeds[0].title.includes('Application for')) return;
-
-    try {
-      await interaction.deferReply({ ephemeral: true });
-      
-      const appEmbed = interaction.message.embeds[0];
-      const applicantId = appEmbed.description.match(/<@!?(\d+)>/)[1];
-      const applicant = interaction.guild.members.cache.get(applicantId);
-      
-      if (!applicant) {
-        return interaction.editReply('❌ Could not find the applicant in this server.');
-      }
-
-      const roleName = appEmbed.title.replace('📋 Application for ', '');
-      const role = interaction.guild.roles.cache.find(r => r.name === roleName);
-
-      if (interaction.customId === 'accept_app') {
-        await applicant.roles.add(role);
-
-        const acceptEmbed = new EmbedBuilder()
-          .setColor('#00FF00')
-          .setTitle(`✅ Application Accepted!`)
-          .setDescription(`Congratulations! Your application for ${role.name} in ${interaction.guild.name} has been accepted.`)
-          .addFields(
-            { name: 'Accepted By', value: interaction.user.toString(), inline: true },
-            { name: 'Accepted At', value: new Date().toLocaleString(), inline: true }
-          )
-          .setThumbnail(interaction.guild.iconURL());
-
-        try {
-          await applicant.send({ embeds: [acceptEmbed] });
-        } catch (e) {
-          console.log('Could not send DM to applicant');
-        }
-
-        await interaction.editReply('✅ Application accepted and role assigned!');
-      } else {
-        const rejectEmbed = new EmbedBuilder()
-          .setColor('#FF0000')
-          .setTitle(`❌ Application Rejected`)
-          .setDescription(`Your application for ${role.name} in ${interaction.guild.name} has been rejected.`)
-          .addFields(
-            { name: 'Rejected By', value: interaction.user.toString(), inline: true },
-            { name: 'Rejected At', value: new Date().toLocaleString(), inline: true }
-          )
-          .setFooter({ text: 'You may reapply if you wish', iconURL: interaction.guild.iconURL() });
-
-        try {
-          await applicant.send({ embeds: [rejectEmbed] });
-        } catch (e) {
-          console.log('Could not send DM to applicant');
-        }
-
-        await interaction.editReply('✅ Application rejected and applicant notified!');
-      }
-
-      const updatedEmbed = new EmbedBuilder(appEmbed.data)
-        .setColor(interaction.customId === 'accept_app' ? '#00FF00' : '#FF0000')
-        .setTitle(`📋 ${interaction.customId === 'accept_app' ? '✅ Accepted' : '❌ Rejected'}: ${roleName}`);
-
-      await interaction.message.edit({ embeds: [updatedEmbed], components: [] });
-    } catch (error) {
-      handleError(error, interaction);
-    }
-  });
+// Theme button builder
+function createThemeButton(customId, label, emoji, style = ButtonStyle.Primary) {
+  return new ButtonBuilder()
+    .setCustomId(customId)
+    .setLabel(label)
+    .setEmoji(emoji)
+    .setStyle(style);
 }
 
-// Warning system
-function setupWarningSystem() {
+// Theme action row
+function createThemeActionRow(buttons) {
+  return new ActionRowBuilder().addComponents(buttons);
+}
+
+// Moderation system
+function setupModerationSystem() {
   client.on('messageCreate', async message => {
     if (!message.content.startsWith('!') || message.author.bot) return;
-
+    
     const args = message.content.slice(1).trim().split(/ +/);
     const command = args.shift().toLowerCase();
 
     try {
+      // Warn limit command
       if (command === 'warnlimit') {
         if (!hasPremiumPermissions(message.member)) {
-          return message.reply('❌ You need premium permissions to set warn limits!');
+          return message.reply({ embeds: [
+            createThemeEmbed('Access Denied', 'You need premium permissions to set warn limits!', themeColors.error)
+          ]});
         }
         
         const limit = parseInt(args[0]);
         if (isNaN(limit) || limit < 1) {
-          return message.reply('❌ Please provide a valid number (1 or higher)!');
+          return message.reply({ embeds: [
+            createThemeEmbed('Invalid Input', 'Please provide a valid number (1 or higher)!', themeColors.warning)
+          ]});
         }
 
         botData.warnLimits.set(message.guild.id, limit);
         
-        const successEmbed = new EmbedBuilder()
-          .setColor('#00FF00')
-          .setTitle('✅ Warn Limit Set!')
-          .setDescription(`Members will now be automatically kicked after reaching ${limit} warnings.`)
-          .setFooter({ text: 'Use !warn @user to issue warnings', iconURL: message.guild.iconURL() });
-
-        await message.reply({ embeds: [successEmbed] });
+        await message.reply({ embeds: [
+          createThemeEmbed('Warn Limit Set', `Members will now be automatically kicked after reaching ${limit} warnings.`, themeColors.success)
+        ]});
       }
 
+      // Warn command
       if (command === 'warn') {
         if (!hasPremiumPermissions(message.member)) {
-          return message.reply('❌ You need premium permissions to use this command!');
+          return message.reply({ embeds: [
+            createThemeEmbed('Access Denied', 'You need premium permissions to warn members!', themeColors.error)
+          ]});
         }
+        
         const user = message.mentions.users.first();
-        if (!user) return message.reply('❌ Please mention a user to warn!');
+        if (!user) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Invalid User', 'Please mention a user to warn!', themeColors.warning)
+          ]});
+        }
 
         const member = message.guild.members.cache.get(user.id);
-        if (!member) return message.reply('❌ That user is not in this server!');
+        if (!member) {
+          return message.reply({ embeds: [
+            createThemeEmbed('User Not Found', 'That user is not in this server!', themeColors.warning)
+          ]});
+        }
 
         const reason = args.slice(1).join(' ') || 'No reason provided';
 
@@ -764,43 +196,43 @@ function setupWarningSystem() {
           try {
             await member.kick(`Automatically kicked for reaching ${warnLimit} warnings`);
 
-            const kickEmbed = new EmbedBuilder()
-              .setColor('#FF0000')
-              .setTitle('⚠️ Member Kicked')
-              .setDescription(`${user.toString()} has been automatically kicked for reaching ${warnLimit} warnings.`)
+            const kickEmbed = createThemeEmbed('Member Kicked', 
+              `${user.toString()} has been automatically kicked for reaching ${warnLimit} warnings.`, themeColors.error)
               .addFields(
                 { name: 'Total Warnings', value: warnings.length.toString(), inline: true },
                 { name: 'Last Warning', value: reason, inline: true }
               )
-              .setFooter({ text: `Moderator: ${message.author.tag}`, iconURL: message.author.displayAvatarURL() });
+              .setFooter({ 
+                text: `Moderator: ${message.author.tag}`, 
+                iconURL: message.author.displayAvatarURL() 
+              });
 
             await message.channel.send({ embeds: [kickEmbed] });
           } catch (e) {
-            message.reply('❌ Failed to automatically kick the member. I might not have permission.');
+            await message.reply({ embeds: [
+              createThemeEmbed('Action Failed', 'Failed to automatically kick the member. I might not have permission.', themeColors.error)
+            ]});
           }
         } else {
-          const warnEmbed = new EmbedBuilder()
-            .setColor('#FFA500')
-            .setTitle('⚠️ Warning Issued')
-            .setDescription(`${user.toString()} has been warned.`)
+          const warnEmbed = createThemeEmbed('Warning Issued', `${user.toString()} has been warned.`, themeColors.warning)
             .addFields(
               { name: 'Reason', value: reason, inline: true },
               { name: 'Total Warnings', value: `${warnings.length}/${warnLimit}`, inline: true }
             )
-            .setFooter({ text: `Moderator: ${message.author.tag}`, iconURL: message.author.displayAvatarURL() });
+            .setFooter({ 
+              text: `Moderator: ${message.author.tag}`, 
+              iconURL: message.author.displayAvatarURL() 
+            });
 
           await message.channel.send({ embeds: [warnEmbed] });
 
           try {
-            const dmEmbed = new EmbedBuilder()
-              .setColor('#FFA500')
-              .setTitle(`⚠️ Warning in ${message.guild.name}`)
-              .setDescription(`You have received a warning from a moderator.`)
+            const dmEmbed = createThemeEmbed(`Warning in ${message.guild.name}`, 
+              `You have received a warning from a moderator.`, themeColors.warning)
               .addFields(
                 { name: 'Reason', value: reason, inline: true },
                 { name: 'Total Warnings', value: `${warnings.length}/${warnLimit}`, inline: true }
-              )
-              .setFooter({ text: 'Repeated warnings may result in kicks or bans', iconURL: message.guild.iconURL() });
+              );
 
             await user.send({ embeds: [dmEmbed] });
           } catch (e) {
@@ -809,21 +241,22 @@ function setupWarningSystem() {
         }
       }
 
+      // Warnings command
       if (command === 'warnings') {
         const user = message.mentions.users.first() || message.author;
         const guildWarnings = botData.warnings.get(message.guild.id);
 
         if (!guildWarnings || !guildWarnings.has(user.id)) {
-          return message.reply(`ℹ️ ${user.toString()} has no warnings.`);
+          return message.reply({ embeds: [
+            createThemeEmbed('No Warnings', `${user.toString()} has no warnings.`, themeColors.info)
+          ]});
         }
 
         const warnings = guildWarnings.get(user.id);
         const warnLimit = botData.warnLimits.get(message.guild.id) || 3;
         
-        const warnEmbed = new EmbedBuilder()
-          .setColor('#FFA500')
-          .setTitle(`⚠️ Warnings for ${user.tag}`)
-          .setDescription(`Total warnings: ${warnings.length}/${warnLimit}`);
+        const warnEmbed = createThemeEmbed(`Warnings for ${user.tag}`, 
+          `Total warnings: ${warnings.length}/${warnLimit}`, themeColors.warning);
 
         warnings.forEach((warn, i) => {
           warnEmbed.addFields({
@@ -835,8 +268,1878 @@ function setupWarningSystem() {
 
         await message.channel.send({ embeds: [warnEmbed] });
       }
+
+      // Jail system commands
+      if (command === 'jail') {
+        if (!hasPremiumPermissions(message.member)) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Access Denied', 'You need premium permissions to jail members!', themeColors.error)
+          ]});
+        }
+        
+        const user = message.mentions.users.first();
+        if (!user) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Invalid User', 'Please mention a user to jail!', themeColors.warning)
+          ]});
+        }
+
+        const member = message.guild.members.cache.get(user.id);
+        const jailRole = message.guild.roles.cache.find(r => r.name.toLowerCase() === 'jailed');
+        
+        if (!jailRole) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Role Missing', 'No "jailed" role found!', themeColors.error)
+          ]});
+        }
+
+        await member.roles.add(jailRole);
+        botData.jailed.set(user.id, { 
+          guild: message.guild.id, 
+          timestamp: Date.now() 
+        });
+
+        await message.reply({ embeds: [
+          createThemeEmbed('Member Jailed', `${user.tag} has been jailed.`, themeColors.success)
+        ]});
+
+        try {
+          const dmEmbed = createThemeEmbed(`Jailed in ${message.guild.name}`, 
+            'You have been jailed by a moderator.', themeColors.warning);
+
+          await user.send({ embeds: [dmEmbed] });
+        } catch (e) {
+          console.log('Could not send DM to jailed user');
+        }
+      }
+
+      if (command === 'jailers') {
+        const jailed = [...botData.jailed.entries()]
+          .filter(([_, v]) => v.guild === message.guild.id)
+          .map(([id]) => `<@${id}>`);
+        
+        if (!jailed.length) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Jail Status', 'No one is currently jailed.', themeColors.info)
+          ]});
+        }
+
+        await message.reply({ embeds: [
+          createThemeEmbed('Jailed Members', jailed.join('\n'), themeColors.warning)
+        ]});
+      }
+
+      if (command === 'free') {
+        if (!hasPremiumPermissions(message.member)) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Access Denied', 'You need premium permissions to free members!', themeColors.error)
+          ]});
+        }
+        
+        const user = message.mentions.users.first();
+        if (!user) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Invalid User', 'Please mention a user to free!', themeColors.warning)
+          ]});
+        }
+
+        const member = message.guild.members.cache.get(user.id);
+        const jailRole = message.guild.roles.cache.find(r => r.name.toLowerCase() === 'jailed');
+        
+        if (!jailRole) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Role Missing', 'No "jailed" role found!', themeColors.error)
+          ]});
+        }
+
+        await member.roles.remove(jailRole);
+        botData.jailed.delete(user.id);
+
+        await message.reply({ embeds: [
+          createThemeEmbed('Member Freed', `${user.tag} has been freed from jail.`, themeColors.success)
+        ]});
+
+        try {
+          const dmEmbed = createThemeEmbed(`Freed in ${message.guild.name}`, 
+            'You have been released from jail by a moderator.', themeColors.success);
+
+          await user.send({ embeds: [dmEmbed] });
+        } catch (e) {
+          console.log('Could not send DM to freed user');
+        }
+      }
+
+      // Kick command
+      if (command === 'kick') {
+        if (!hasPremiumPermissions(message.member)) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Access Denied', 'You need premium permissions to kick members!', themeColors.error)
+          ]});
+        }
+        
+        const user = message.mentions.users.first();
+        if (!user) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Invalid User', 'Please mention a user to kick!', themeColors.warning)
+          ]});
+        }
+
+        const member = message.guild.members.cache.get(user.id);
+        if (!member) {
+          return message.reply({ embeds: [
+            createThemeEmbed('User Not Found', 'That user is not in this server!', themeColors.warning)
+          ]});
+        }
+
+        const reason = args.slice(1).join(' ') || 'No reason provided';
+
+        try {
+          const dmEmbed = createThemeEmbed(`Kicked from ${message.guild.name}`, 
+            `You have been kicked by a moderator.\n**Reason:** ${reason}`, themeColors.error);
+
+          await user.send({ embeds: [dmEmbed] });
+        } catch (e) {
+          console.log('Could not send DM to kicked user');
+        }
+
+        await member.kick(reason);
+        
+        await message.reply({ embeds: [
+          createThemeEmbed('Member Kicked', `${user.tag} has been kicked.`, themeColors.success)
+            .addFields({ name: 'Reason', value: reason })
+        ]});
+      }
+
+      // Ban command
+      if (command === 'ban') {
+        if (!hasPremiumPermissions(message.member)) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Access Denied', 'You need premium permissions to ban members!', themeColors.error)
+          ]});
+        }
+        
+        const user = message.mentions.users.first();
+        if (!user) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Invalid User', 'Please mention a user to ban!', themeColors.warning)
+          ]});
+        }
+
+        const member = message.guild.members.cache.get(user.id);
+        if (!member) {
+          return message.reply({ embeds: [
+            createThemeEmbed('User Not Found', 'That user is not in this server!', themeColors.warning)
+          ]});
+        }
+
+        const reason = args.slice(1).join(' ') || 'No reason provided';
+
+        try {
+          const dmEmbed = createThemeEmbed(`Banned from ${message.guild.name}`, 
+            `You have been banned by a moderator.\n**Reason:** ${reason}`, themeColors.error);
+
+          await user.send({ embeds: [dmEmbed] });
+        } catch (e) {
+          console.log('Could not send DM to banned user');
+        }
+
+        await member.ban({ reason });
+        
+        await message.reply({ embeds: [
+          createThemeEmbed('Member Banned', `${user.tag} has been banned.`, themeColors.success)
+            .addFields({ name: 'Reason', value: reason })
+        ]});
+      }
+
+      // Mute command
+      if (command === 'mute') {
+        if (!hasPremiumPermissions(message.member)) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Access Denied', 'You need premium permissions to mute members!', themeColors.error)
+          ]});
+        }
+        
+        const user = message.mentions.users.first();
+        if (!user) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Invalid User', 'Please mention a user to mute!', themeColors.warning)
+          ]});
+        }
+
+        const member = message.guild.members.cache.get(user.id);
+        const muteRole = message.guild.roles.cache.find(r => r.name.toLowerCase() === 'muted');
+        
+        if (!muteRole) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Role Missing', 'No "muted" role found!', themeColors.error)
+          ]});
+        }
+
+        const duration = args[1] ? parseInt(args[1]) : 10;
+        
+        await member.roles.add(muteRole);
+        
+        try {
+          const dmEmbed = createThemeEmbed(`Muted in ${message.guild.name}`, 
+            `You have been muted for ${duration} minutes.`, themeColors.warning);
+
+          await user.send({ embeds: [dmEmbed] });
+        } catch (e) {
+          console.log('Could not send DM to muted user');
+        }
+
+        await message.reply({ embeds: [
+          createThemeEmbed('Member Muted', `${user.tag} has been muted for ${duration} minutes.`, themeColors.success)
+        ]});
+
+        setTimeout(async () => {
+          if (member.roles.cache.has(muteRole.id)) {
+            await member.roles.remove(muteRole);
+            
+            try {
+              const dmEmbed = createThemeEmbed(`Unmuted in ${message.guild.name}`, 
+                'Your mute has expired.', themeColors.success);
+
+              await user.send({ embeds: [dmEmbed] });
+            } catch (e) {
+              console.log('Could not send DM to unmuted user');
+            }
+          }
+        }, duration * 60 * 1000);
+      }
     } catch (error) {
       handleError(error, message);
+    }
+  });
+}
+
+// Economy system
+function setupEconomySystem() {
+  // Helper function to get user economy data
+  function getEco(userId) {
+    if (!botData.economy.has(userId)) {
+      botData.economy.set(userId, {
+        wallet: 100,
+        bank: 0,
+        bio: '',
+        items: [],
+        job: null,
+        level: 1,
+        xp: 0,
+        badges: [],
+        lastBeg: 0,
+        lastWork: 0,
+        lastRob: 0,
+        lastLottery: 0
+      });
+    }
+    return botData.economy.get(userId);
+  }
+
+  client.on('messageCreate', async message => {
+    if (!message.content.startsWith('!') || message.author.bot) return;
+    
+    const args = message.content.slice(1).trim().split(/ +/);
+    const command = args.shift().toLowerCase();
+
+    try {
+      // Balance command
+      if (['balance', 'bal'].includes(command)) {
+        const eco = getEco(message.author.id);
+        
+        const embed = createThemeEmbed(`${message.author.username}'s Balance`, 'Your current financial status', themeColors.economy)
+          .addFields(
+            { name: '💰 Wallet', value: `${eco.wallet} coins`, inline: false },
+            { name: '🏦 Bank', value: `${eco.bank} coins`, inline: false },
+            { name: '💼 Job', value: eco.job || 'Unemployed', inline: false },
+            { name: '📊 Level', value: eco.level.toString(), inline: false },
+            { name: '⭐ XP', value: `${eco.xp}/${eco.level * 100}`, inline: false },
+            { name: '🎖️ Badges', value: eco.badges.join(' ') || 'None', inline: false }
+          )
+          .setThumbnail(message.author.displayAvatarURL());
+
+        await message.reply({ embeds: [embed] });
+      }
+
+      // Deposit command
+      if (['deposit', 'dep'].includes(command)) {
+        const amount = parseInt(args[0]);
+        const eco = getEco(message.author.id);
+        
+        if (isNaN(amount) || amount < 1) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Invalid Amount', 'Please provide a valid amount to deposit!', themeColors.warning)
+          ]});
+        }
+
+        if (eco.wallet < amount) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Insufficient Funds', 'You don\'t have enough coins in your wallet!', themeColors.error)
+          ]});
+        }
+
+        eco.wallet -= amount;
+        eco.bank += amount;
+        
+        await message.reply({ embeds: [
+          createThemeEmbed('Deposit Successful', `You deposited ${amount} coins to your bank.`, themeColors.success)
+            .addFields(
+              { name: '💰 New Wallet', value: `${eco.wallet} coins`, inline: true },
+              { name: '🏦 New Bank', value: `${eco.bank} coins`, inline: true }
+            )
+        ]});
+      }
+
+      // Withdraw command
+      if (['withdraw', 'with'].includes(command)) {
+        const amount = parseInt(args[0]);
+        const eco = getEco(message.author.id);
+        
+        if (isNaN(amount) || amount < 1) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Invalid Amount', 'Please provide a valid amount to withdraw!', themeColors.warning)
+          ]});
+        }
+
+        if (eco.bank < amount) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Insufficient Funds', 'You don\'t have enough coins in your bank!', themeColors.error)
+          ]});
+        }
+
+        eco.bank -= amount;
+        eco.wallet += amount;
+        
+        await message.reply({ embeds: [
+          createThemeEmbed('Withdrawal Successful', `You withdrew ${amount} coins from your bank.`, themeColors.success)
+            .addFields(
+              { name: '💰 New Wallet', value: `${eco.wallet} coins`, inline: true },
+              { name: '🏦 New Bank', value: `${eco.bank} coins`, inline: true }
+            )
+        ]});
+      }
+
+      // Beg command
+      if (command === 'beg') {
+        const eco = getEco(message.author.id);
+        const now = Date.now();
+        const cooldown = 60 * 1000; // 1 minute cooldown
+        
+        if (now - eco.lastBeg < cooldown) {
+          const remaining = Math.ceil((cooldown - (now - eco.lastBeg)) / 1000);
+          return message.reply({ embeds: [
+            createThemeEmbed('Begging Cooldown', `You can beg again in ${remaining} seconds.`, themeColors.warning)
+          ]});
+        }
+
+        eco.lastBeg = now;
+        const amount = Math.floor(Math.random() * 50) + 1;
+        eco.wallet += amount;
+        
+        const responses = [
+          `A kind stranger gave you ${amount} coins!`,
+          `You begged on the street and earned ${amount} coins!`,
+          `Someone took pity on you and gave you ${amount} coins.`,
+          `You found ${amount} coins on the ground while begging!`
+        ];
+        
+        await message.reply({ embeds: [
+          createThemeEmbed('Begging Success', responses[Math.floor(Math.random() * responses.length)], themeColors.success)
+        ]});
+      }
+
+      // Work command
+      if (command === 'work') {
+        const eco = getEco(message.author.id);
+        const now = Date.now();
+        const cooldown = 5 * 60 * 1000; // 5 minute cooldown
+        
+        if (!eco.job) {
+          return message.reply({ embeds: [
+            createThemeEmbed('No Job', 'You don\'t have a job! Use `!jobs` to see available jobs and `!apply <job>` to get one.', themeColors.warning)
+          ]});
+        }
+
+        if (now - eco.lastWork < cooldown) {
+          const remaining = Math.ceil((cooldown - (now - eco.lastWork)) / 1000);
+          return message.reply({ embeds: [
+            createThemeEmbed('Work Cooldown', `You can work again in ${remaining} seconds.`, themeColors.warning)
+          ]});
+        }
+
+        eco.lastWork = now;
+        const baseAmount = 50 + (eco.level * 10);
+        const amount = Math.floor(Math.random() * baseAmount) + baseAmount;
+        eco.wallet += amount;
+        
+        // Add XP
+        eco.xp += 10;
+        if (eco.xp >= eco.level * 100) {
+          eco.xp = 0;
+          eco.level += 1;
+          
+          await message.reply({ embeds: [
+            createThemeEmbed('Level Up!', `Congratulations! You've reached level ${eco.level}!`, themeColors.success)
+          ]});
+        }
+        
+        const responses = [
+          `You worked hard as a ${eco.job} and earned ${amount} coins!`,
+          `Your shift as a ${eco.job} paid you ${amount} coins.`,
+          `After a long day as a ${eco.job}, you earned ${amount} coins.`,
+          `Your ${eco.job} job rewarded you with ${amount} coins.`
+        ];
+        
+        await message.reply({ embeds: [
+          createThemeEmbed('Work Complete', responses[Math.floor(Math.random() * responses.length)], themeColors.success)
+        ]});
+      }
+
+      // Jobs command
+      if (command === 'jobs') {
+        const jobs = [
+          { name: 'Chef', emoji: '👨‍🍳', salary: '50-150 coins' },
+          { name: 'Farmer', emoji: '👨‍🌾', salary: '40-120 coins' },
+          { name: 'Developer', emoji: '👨‍💻', salary: '80-200 coins' },
+          { name: 'Artist', emoji: '👨‍🎨', salary: '60-180 coins' },
+          { name: 'Writer', emoji: '✍️', salary: '50-150 coins' }
+        ];
+        
+        const embed = createThemeEmbed('Available Jobs', 'Here are the jobs you can apply for:', themeColors.info);
+        
+        jobs.forEach(job => {
+          embed.addFields({
+            name: `${job.emoji} ${job.name}`,
+            value: `Salary: ${job.salary}\nUse \`!apply ${job.name.toLowerCase()}\` to apply`,
+            inline: true
+          });
+        });
+        
+        await message.reply({ embeds: [embed] });
+      }
+
+      // Apply command
+      if (command === 'apply') {
+        const job = args[0]?.toLowerCase();
+        if (!job) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Missing Job', 'Please specify a job to apply for! Use `!jobs` to see options.', themeColors.warning)
+          ]});
+        }
+
+        const jobs = ['chef', 'farmer', 'developer', 'artist', 'writer'];
+        if (!jobs.includes(job)) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Invalid Job', 'That job doesn\'t exist! Use `!jobs` to see available options.', themeColors.error)
+          ]});
+        }
+
+        const eco = getEco(message.author.id);
+        eco.job = job.charAt(0).toUpperCase() + job.slice(1);
+        
+        await message.reply({ embeds: [
+          createThemeEmbed('Job Applied', `You are now a **${eco.job}**! Use \`!work\` to earn coins.`, themeColors.success)
+        ]});
+      }
+
+      // Leaderboard command
+      if (['lb', 'leaderboard'].includes(command)) {
+        const top = [...botData.economy.entries()]
+          .sort((a, b) => (b[1].wallet + b[1].bank) - (a[1].wallet + a[1].bank))
+          .slice(0, 10);
+        
+        const embed = createThemeEmbed('🏆 Economy Leaderboard', 'Top 10 richest users:', themeColors.accent);
+        
+        top.forEach(([id, eco], i) => {
+          embed.addFields({
+            name: `${i + 1}. ${client.users.cache.get(id)?.username || 'Unknown'}`,
+            value: `💰 ${eco.wallet + eco.bank} coins | Level ${eco.level}`,
+            inline: false
+          });
+        });
+        
+        await message.channel.send({ embeds: [embed] });
+      }
+
+      // Coinflip game
+      if (command === 'cf' || command === 'coinflip') {
+        let side = args[0]?.toLowerCase();
+        const amount = parseInt(args[1]);
+        
+        // Handle both head/heads and tail/tails
+        if (side === 'head') side = 'heads';
+        if (side === 'tail') side = 'tails';
+        
+        if (!['heads', 'tails'].includes(side)) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Invalid Choice', 'Please choose `heads` or `tails`! (or head/tail)', themeColors.warning)
+          ]});
+        }
+
+        if (isNaN(amount) || amount < 1) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Invalid Amount', 'Please provide a valid amount to bet!', themeColors.warning)
+          ]});
+        }
+
+        const eco = getEco(message.author.id);
+        if (eco.wallet < amount) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Insufficient Funds', 'You don\'t have enough coins to bet that amount!', themeColors.error)
+          ]});
+        }
+
+        const win = Math.random() < 0.5 ? 'heads' : 'tails';
+        
+        if (side === win) {
+          eco.wallet += amount;
+          await message.reply({ embeds: [
+            createThemeEmbed('You Won!', `The coin landed on **${win}**! You won ${amount} coins.`, themeColors.success)
+          ]});
+        } else {
+          eco.wallet -= amount;
+          await message.reply({ embeds: [
+            createThemeEmbed('You Lost!', `The coin landed on **${win}**. You lost ${amount} coins.`, themeColors.error)
+          ]});
+        }
+      }
+
+      // Dice game
+      if (command === 'dice') {
+        const num = parseInt(args[0]);
+        const amount = parseInt(args[1]);
+        
+        if (isNaN(num) || num < 1 || num > 6) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Invalid Number', 'Please pick a number between 1 and 6!', themeColors.warning)
+          ]});
+        }
+
+        if (isNaN(amount) || amount < 1) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Invalid Amount', 'Please provide a valid amount to bet!', themeColors.warning)
+          ]});
+        }
+
+        const eco = getEco(message.author.id);
+        if (eco.wallet < amount) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Insufficient Funds', 'You don\'t have enough coins to bet that amount!', themeColors.error)
+          ]});
+        }
+
+        const roll = Math.floor(Math.random() * 6) + 1;
+        
+        if (roll === num) {
+          eco.wallet += amount * 5;
+          await message.reply({ embeds: [
+            createThemeEmbed('You Won!', `You rolled a ${roll} and won ${amount * 5} coins!`, themeColors.success)
+          ]});
+        } else {
+          eco.wallet -= amount;
+          await message.reply({ embeds: [
+            createThemeEmbed('You Lost!', `You rolled a ${roll} and lost ${amount} coins.`, themeColors.error)
+          ]});
+        }
+      }
+
+      // Slots game
+      if (command === 'slots') {
+        const amount = parseInt(args[0]);
+        
+        if (isNaN(amount) || amount < 1) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Invalid Amount', 'Please provide a valid amount to bet!', themeColors.warning)
+          ]});
+        }
+
+        const eco = getEco(message.author.id);
+        if (eco.wallet < amount) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Insufficient Funds', 'You don\'t have enough coins to bet that amount!', themeColors.error)
+          ]});
+        }
+
+        const emojis = ['🍒', '🍋', '🍉', '🍇', '🍀'];
+        const slot = [0, 0, 0].map(() => emojis[Math.floor(Math.random() * emojis.length)]);
+        const win = slot[0] === slot[1] && slot[1] === slot[2];
+        
+        if (win) {
+          eco.wallet += amount * 10;
+          await message.reply({ embeds: [
+            createThemeEmbed('🎰 Slots - JACKPOT!', 
+              `${slot.join(' ')}\nYou won ${amount * 10} coins!`, themeColors.success)
+          ]});
+        } else if (slot[0] === slot[1] || slot[1] === slot[2] || slot[0] === slot[2]) {
+          eco.wallet += amount;
+          await message.reply({ embeds: [
+            createThemeEmbed('🎰 Slots - Small Win!', 
+              `${slot.join(' ')}\nYou got your bet back!`, themeColors.info)
+          ]});
+        } else {
+          eco.wallet -= amount;
+          await message.reply({ embeds: [
+            createThemeEmbed('🎰 Slots - You Lost!', 
+              `${slot.join(' ')}\nYou lost ${amount} coins.`, themeColors.error)
+          ]});
+        }
+      }
+
+      // Profile command
+      if (command === 'profile') {
+        const user = message.mentions.users.first() || message.author;
+        const eco = getEco(user.id);
+        
+        const embed = createThemeEmbed(`${user.username}'s Profile`, eco.bio || 'No bio set.', themeColors.economy)
+          .setThumbnail(user.displayAvatarURL())
+          .addFields(
+            { name: '💰 Wallet', value: `${eco.wallet} coins`, inline: true },
+            { name: '🏦 Bank', value: `${eco.bank} coins`, inline: true },
+            { name: '💼 Job', value: eco.job || 'Unemployed', inline: true },
+            { name: '📊 Level', value: eco.level.toString(), inline: true },
+            { name: '⭐ XP', value: `${eco.xp}/${eco.level * 100}`, inline: true },
+            { name: '🎖️ Badges', value: eco.badges.join(' ') || 'None', inline: true }
+          );
+        
+        await message.reply({ embeds: [embed] });
+      }
+
+      // Set bio command
+      if (command === 'setbio') {
+        const text = args.join(' ');
+        if (!text) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Missing Bio', 'Please provide text for your bio!', themeColors.warning)
+          ]});
+        }
+
+        const eco = getEco(message.author.id);
+        eco.bio = text.slice(0, 200);
+        
+        await message.reply({ embeds: [
+          createThemeEmbed('Bio Updated', 'Your profile bio has been updated!', themeColors.success)
+        ]});
+      }
+
+      // Shop command
+      if (command === 'shop') {
+        const items = [
+          { name: 'Cake', price: 100, emoji: '🍰', description: 'Gives you a small XP boost', command: '!buy cake' },
+          { name: 'Shield', price: 250, emoji: '🛡️', description: 'Protects you from being robbed', command: '!buy shield' },
+          { name: 'Sword', price: 500, emoji: '⚔️', description: 'Increases your robbery success rate', command: '!buy sword' },
+          { name: 'Potion', price: 300, emoji: '🧪', description: 'Boosts your next work earnings', command: '!buy potion' },
+          { name: 'Ring', price: 1000, emoji: '💍', description: 'Increases all earnings by 10%', command: '!buy ring' },
+          { name: 'Lucky Charm', price: 750, emoji: '🍀', description: 'Increases gambling winnings by 15%', command: '!buy luckycharm' },
+          { name: 'Backpack', price: 1500, emoji: '🎒', description: 'Increases your inventory capacity', command: '!buy backpack' },
+          { name: 'Golden Ticket', price: 2000, emoji: '🎫', description: 'Gives you a free lottery ticket', command: '!buy goldenticket' }
+        ];
+        
+        const embed = createThemeEmbed('🛒 Shop', 'Buy items to enhance your economy experience!', themeColors.economy);
+        
+        items.forEach(item => {
+          embed.addFields({
+            name: `${item.emoji} ${item.name} - ${item.price} coins`,
+            value: `${item.description}\n**Command:** \`${item.command}\``,
+            inline: false
+          });
+        });
+        
+        await message.reply({ embeds: [embed] });
+      }
+
+      // Buy command
+      if (command === 'buy') {
+        const item = args[0]?.toLowerCase();
+        if (!item) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Missing Item', 'Please specify an item to buy! Use `!shop` to see options.', themeColors.warning)
+          ]});
+        }
+
+        const items = {
+          cake: { name: 'Cake', price: 100, emoji: '🍰' },
+          shield: { name: 'Shield', price: 250, emoji: '🛡️' },
+          sword: { name: 'Sword', price: 500, emoji: '⚔️' },
+          potion: { name: 'Potion', price: 300, emoji: '🧪' },
+          ring: { name: 'Ring', price: 1000, emoji: '💍' },
+          luckycharm: { name: 'Lucky Charm', price: 750, emoji: '🍀' },
+          backpack: { name: 'Backpack', price: 1500, emoji: '🎒' },
+          goldenticket: { name: 'Golden Ticket', price: 2000, emoji: '🎫' }
+        };
+
+        if (!items[item]) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Invalid Item', 'That item doesn\'t exist! Use `!shop` to see available items.', themeColors.error)
+          ]});
+        }
+
+        const eco = getEco(message.author.id);
+        if (eco.wallet < items[item].price) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Insufficient Funds', `You need ${items[item].price} coins to buy this item!`, themeColors.error)
+          ]});
+        }
+
+        eco.wallet -= items[item].price;
+        eco.items.push(item);
+        
+        await message.reply({ embeds: [
+          createThemeEmbed('Purchase Complete', `You bought a ${items[item].emoji} ${items[item].name}!`, themeColors.success)
+        ]});
+      }
+
+      // Inventory command
+      if (['inventory', 'inv'].includes(command)) {
+        const eco = getEco(message.author.id);
+        
+        if (!eco.items.length) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Inventory Empty', 'You don\'t have any items! Use `!shop` to buy some.', themeColors.info)
+          ]});
+        }
+
+        const itemCounts = {};
+        eco.items.forEach(item => {
+          itemCounts[item] = (itemCounts[item] || 0) + 1;
+        });
+
+        const embed = createThemeEmbed(`${message.author.username}'s Inventory`, 'Your collected items:', themeColors.economy);
+        
+        Object.entries(itemCounts).forEach(([item, count]) => {
+          const itemInfo = {
+            cake: { emoji: '🍰', name: 'Cake' },
+            shield: { emoji: '🛡️', name: 'Shield' },
+            sword: { emoji: '⚔️', name: 'Sword' },
+            potion: { emoji: '🧪', name: 'Potion' },
+            ring: { emoji: '💍', name: 'Ring' },
+            luckycharm: { emoji: '🍀', name: 'Lucky Charm' },
+            backpack: { emoji: '🎒', name: 'Backpack' },
+            goldenticket: { emoji: '🎫', name: 'Golden Ticket' }
+          }[item];
+          
+          embed.addFields({
+            name: `${itemInfo.emoji} ${itemInfo.name}`,
+            value: `Quantity: ${count}`,
+            inline: true
+          });
+        });
+        
+        await message.reply({ embeds: [embed] });
+      }
+
+      // Use command
+      if (command === 'use') {
+        const item = args[0]?.toLowerCase();
+        if (!item) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Missing Item', 'Please specify an item to use! Use `!inv` to see your items.', themeColors.warning)
+          ]});
+        }
+
+        const eco = getEco(message.author.id);
+        if (!eco.items.includes(item)) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Item Not Found', 'You don\'t have that item! Use `!inv` to see your items.', themeColors.error)
+          ]});
+        }
+
+        // Remove the item
+        eco.items = eco.items.filter(i => i !== item);
+        
+        // Apply item effects
+        let effect = '';
+        switch (item) {
+          case 'cake':
+            eco.xp += 20;
+            effect = 'You gained 20 XP!';
+            break;
+          case 'shield':
+            effect = 'You are now protected from robberies for 1 hour!';
+            botData.userSettings.set(message.author.id, {
+              ...(botData.userSettings.get(message.author.id) || {}),
+              robberyProtection: Date.now() + 3600000
+            });
+            break;
+          case 'sword':
+            effect = 'Your next robbery attempt will have increased success chance!';
+            botData.userSettings.set(message.author.id, {
+              ...(botData.userSettings.get(message.author.id) || {}),
+              robberyBoost: true
+            });
+            break;
+          case 'potion':
+            effect = 'Your next work earnings will be doubled!';
+            botData.userSettings.set(message.author.id, {
+              ...(botData.userSettings.get(message.author.id) || {}),
+              workBoost: true
+            });
+            break;
+          case 'ring':
+            effect = 'All your earnings are increased by 10% for 24 hours!';
+            botData.userSettings.set(message.author.id, {
+              ...(botData.userSettings.get(message.author.id) || {}),
+              earningsBoost: Date.now() + 86400000
+            });
+            break;
+          case 'luckycharm':
+            effect = 'Your gambling winnings are increased by 15% for 12 hours!';
+            botData.userSettings.set(message.author.id, {
+              ...(botData.userSettings.get(message.author.id) || {}),
+              gamblingBoost: Date.now() + 43200000
+            });
+            break;
+          case 'backpack':
+            effect = 'Your inventory capacity has been increased!';
+            break;
+          case 'goldenticket':
+            effect = 'You received a free lottery ticket!';
+            break;
+          default:
+            effect = 'Item used!';
+        }
+        
+        await message.reply({ embeds: [
+          createThemeEmbed('Item Used', effect, themeColors.success)
+        ]});
+      }
+
+      // Rob command
+      if (command === 'rob') {
+        const user = message.mentions.users.first();
+        if (!user) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Missing Target', 'Please mention a user to rob!', themeColors.warning)
+          ]});
+        }
+
+        if (user.id === message.author.id) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Invalid Target', 'You can\'t rob yourself!', themeColors.error)
+          ]});
+        }
+
+        const eco = getEco(message.author.id);
+        const targetEco = getEco(user.id);
+        
+        if (targetEco.wallet < 50) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Poor Target', 'That user doesn\'t have enough coins to rob!', themeColors.warning)
+          ]});
+        }
+
+        const now = Date.now();
+        const cooldown = 30 * 60 * 1000; // 30 minute cooldown
+        
+        if (now - eco.lastRob < cooldown) {
+          const remaining = Math.ceil((cooldown - (now - eco.lastRob)) / 1000 / 60);
+          return message.reply({ embeds: [
+            createThemeEmbed('Robbery Cooldown', `You can attempt another robbery in ${remaining} minutes.`, themeColors.warning)
+          ]});
+        }
+
+        eco.lastRob = now;
+        
+        // Check if target has robbery protection
+        const targetSettings = botData.userSettings.get(user.id) || {};
+        if (targetSettings.robberyProtection && targetSettings.robberyProtection > now) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Robbery Failed', 'That user is protected by a shield!', themeColors.error)
+          ]});
+        }
+
+        // Check if robber has sword boost
+        const robberSettings = botData.userSettings.get(message.author.id) || {};
+        const successChance = robberSettings.robberyBoost ? 0.6 : 0.5;
+        
+        if (Math.random() < successChance) {
+          const amount = Math.floor(targetEco.wallet * 0.2);
+          eco.wallet += amount;
+          targetEco.wallet -= amount;
+          
+          await message.reply({ embeds: [
+            createThemeEmbed('Robbery Success', `You robbed ${user.username} and stole ${amount} coins!`, themeColors.success)
+          ]});
+          
+          try {
+            const dmEmbed = createThemeEmbed('You Were Robbed!', 
+              `${message.author.username} robbed you and took ${amount} coins!`, themeColors.error);
+            
+            await user.send({ embeds: [dmEmbed] });
+          } catch (e) {
+            console.log('Could not send DM to robbed user');
+          }
+          
+          // Remove robbery boost if it was used
+          if (robberSettings.robberyBoost) {
+            botData.userSettings.set(message.author.id, {
+              ...robberSettings,
+              robberyBoost: false
+            });
+          }
+        } else {
+          const penalty = Math.floor(eco.wallet * 0.1);
+          eco.wallet -= penalty;
+          
+          await message.reply({ embeds: [
+            createThemeEmbed('Robbery Failed', `You got caught and had to pay a ${penalty} coin fine!`, themeColors.error)
+          ]});
+        }
+      }
+
+      // Economy reset (admin only)
+      if (command === 'ecoreset') {
+        if (!hasPremiumPermissions(message.member)) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Access Denied', 'You need premium permissions to reset economy data!', themeColors.error)
+          ]});
+        }
+        
+        const user = message.mentions.users.first();
+        if (!user) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Missing User', 'Please mention a user to reset!', themeColors.warning)
+          ]});
+        }
+
+        botData.economy.set(user.id, {
+          wallet: 100,
+          bank: 0,
+          bio: '',
+          items: [],
+          job: null,
+          level: 1,
+          xp: 0,
+          badges: [],
+          lastBeg: 0,
+          lastWork: 0,
+          lastRob: 0
+        });
+        
+        await message.reply({ embeds: [
+          createThemeEmbed('Economy Reset', `${user.username}'s economy data has been reset.`, themeColors.success)
+        ]});
+      }
+
+      // Lottery system
+      if (command === 'lottery') {
+        const subcommand = args[0]?.toLowerCase();
+        const eco = getEco(message.author.id);
+
+        if (!subcommand || subcommand === 'info') {
+          // Show lottery info
+          const embed = createThemeEmbed('🎟️ Lottery System', 'Join the lottery for a chance to win big!', themeColors.economy)
+            .addFields(
+              { name: 'Current Pot', value: `${botData.lottery.pot} coins`, inline: true },
+              { name: 'Participants', value: botData.lottery.participants.length.toString(), inline: true },
+              { name: 'Your Tickets', value: eco.items.filter(i => i === 'goldenticket').length.toString(), inline: true },
+              { name: 'How to Join', value: 'Use `!lottery join <amount>` to buy tickets (100 coins each)\nOr use `!lottery join free` if you have a Golden Ticket', inline: false },
+              { name: 'Your Chance', value: botData.lottery.participants.length > 0 
+                ? `You have a ${((eco.items.filter(i => i === 'goldenticket').length + 1) / (botData.lottery.participants.length + 1) * 100).toFixed(2)}% chance to win!` 
+                : 'Be the first to join!', inline: false }
+            );
+          
+          return message.reply({ embeds: [embed] });
+        }
+
+        if (subcommand === 'join') {
+          const amountArg = args[1]?.toLowerCase();
+          
+          if (amountArg === 'free') {
+            // Check for golden ticket
+            if (!eco.items.includes('goldenticket')) {
+              return message.reply({ embeds: [
+                createThemeEmbed('No Golden Ticket', 'You don\'t have a Golden Ticket to enter for free!', themeColors.error)
+              ]});
+            }
+            
+            // Remove golden ticket and add to lottery
+            eco.items = eco.items.filter(i => i !== 'goldenticket');
+            botData.lottery.participants.push(message.author.id);
+            
+            return message.reply({ embeds: [
+              createThemeEmbed('Lottery Joined', 'You entered the lottery using your Golden Ticket!', themeColors.success)
+            ]});
+          }
+          
+          const amount = parseInt(amountArg);
+          if (isNaN(amount)) {
+            return message.reply({ embeds: [
+              createThemeEmbed('Invalid Amount', 'Please specify how many tickets to buy (100 coins each) or "free" to use a Golden Ticket', themeColors.warning)
+            ]});
+          }
+
+          const totalCost = amount * 100;
+          if (eco.wallet < totalCost) {
+            return message.reply({ embeds: [
+              createThemeEmbed('Insufficient Funds', `You need ${totalCost} coins to buy ${amount} tickets!`, themeColors.error)
+              .addFields(
+                { name: 'Your Wallet', value: `${eco.wallet} coins`, inline: true },
+                { name: 'Required', value: `${totalCost} coins`, inline: true }
+              )
+            ]});
+          }
+
+          // Deduct coins and add tickets
+          eco.wallet -= totalCost;
+          botData.lottery.pot += totalCost;
+          for (let i = 0; i < amount; i++) {
+            botData.lottery.participants.push(message.author.id);
+          }
+
+          return message.reply({ embeds: [
+            createThemeEmbed('Lottery Joined', `You bought ${amount} lottery tickets for ${totalCost} coins!`, themeColors.success)
+            .addFields(
+              { name: 'Current Pot', value: `${botData.lottery.pot} coins`, inline: true },
+              { name: 'Your Tickets', value: amount.toString(), inline: true },
+              { name: 'Total Participants', value: botData.lottery.participants.length.toString(), inline: true }
+            )
+          ]});
+        }
+
+        if (subcommand === 'draw' && hasPremiumPermissions(message.member)) {
+          if (botData.lottery.participants.length === 0) {
+            return message.reply({ embeds: [
+              createThemeEmbed('No Participants', 'There are no participants in the current lottery!', themeColors.warning)
+            ]});
+          }
+
+          // Draw a winner
+          const winnerIndex = Math.floor(Math.random() * botData.lottery.participants.length);
+          const winnerId = botData.lottery.participants[winnerIndex];
+          const winner = await client.users.fetch(winnerId);
+          const winnerEco = getEco(winnerId);
+
+          // Award the pot
+          winnerEco.wallet += botData.lottery.pot;
+
+          const embed = createThemeEmbed('🎉 Lottery Winner!', `The lottery has been drawn!`, themeColors.success)
+            .addFields(
+              { name: 'Winner', value: winner.toString(), inline: true },
+              { name: 'Prize', value: `${botData.lottery.pot} coins`, inline: true },
+              { name: 'Total Tickets', value: botData.lottery.participants.length.toString(), inline: true }
+            )
+            .setThumbnail(winner.displayAvatarURL());
+
+          await message.channel.send({ embeds: [embed] });
+
+          // Reset lottery
+          botData.lottery = {
+            participants: [],
+            pot: 0,
+            active: false
+          };
+        }
+      }
+    } catch (error) {
+      handleError(error, message);
+    }
+  });
+}
+
+// Ticket system
+function setupTicketSystem() {
+  client.on('messageCreate', async message => {
+    if (!message.content.startsWith('!') || message.author.bot) return;
+    
+    const args = message.content.slice(1).trim().split(/ +/);
+    const command = args.shift().toLowerCase();
+
+    try {
+      // Set ticket message
+      if (command === 'ticket' && args[0] === 'msg') {
+        if (!hasPremiumPermissions(message.member)) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Access Denied', 'You need premium permissions to set up tickets!', themeColors.error)
+          ]});
+        }
+        
+        const ticketMsg = args.slice(1).join(' ');
+        botData.ticketSettings[message.guild.id] = botData.ticketSettings[message.guild.id] || {};
+        botData.ticketSettings[message.guild.id].message = ticketMsg;
+
+        await message.reply({ embeds: [
+          createThemeEmbed('Ticket Message Set', 'The ticket panel message has been configured.', themeColors.success)
+            .addFields({ name: 'Message', value: ticketMsg || 'Not provided' })
+        ]});
+      }
+
+      // Set ticket options
+      if (command === 'setoptions') {
+        if (!hasPremiumPermissions(message.member)) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Access Denied', 'You need premium permissions to set ticket options!', themeColors.error)
+          ]});
+        }
+        
+        const options = args.join(' ').split(',').map(opt => opt.trim());
+        const formattedOptions = options.map(opt => {
+          const [name, emoji] = opt.split(':').map(part => part.trim());
+          return { name, emoji: emoji || '🎫' };
+        });
+
+        botData.ticketSettings[message.guild.id] = botData.ticketSettings[message.guild.id] || {};
+        botData.ticketSettings[message.guild.id].options = formattedOptions;
+
+        await message.reply({ embeds: [
+          createThemeEmbed('Ticket Options Set', 'The ticket dropdown options have been configured.', themeColors.success)
+            .addFields({
+              name: 'Options', 
+              value: formattedOptions.map(opt => `${opt.emoji} ${opt.name}`).join('\n')
+            })
+        ]});
+      }
+
+      // Set ticket viewer role
+      if (command === 'setviewer') {
+        if (!hasPremiumPermissions(message.member)) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Access Denied', 'You need premium permissions to set ticket viewers!', themeColors.error)
+          ]});
+        }
+        
+        const role = message.mentions.roles.first();
+        if (!role) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Invalid Role', 'Please mention a valid role!', themeColors.warning)
+          ]});
+        }
+
+        botData.ticketSettings[message.guild.id] = botData.ticketSettings[message.guild.id] || {};
+        botData.ticketSettings[message.guild.id].viewerRole = role.id;
+
+        await message.reply({ embeds: [
+          createThemeEmbed('Viewer Role Set', `The role ${role.toString()} can now view all ticket channels.`, themeColors.success)
+        ]});
+      }
+
+      // Set ticket category
+      if (command === 'setticketcategory') {
+        if (!hasPremiumPermissions(message.member)) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Access Denied', 'You need premium permissions to set the ticket category!', themeColors.error)
+          ]});
+        }
+        
+        const categoryId = args[0];
+        if (!categoryId) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Missing Category', 'Please provide a valid category ID!', themeColors.warning)
+          ]});
+        }
+
+        botData.ticketSettings[message.guild.id] = botData.ticketSettings[message.guild.id] || {};
+        botData.ticketSettings[message.guild.id].categoryId = categoryId;
+
+        await message.reply({ embeds: [
+          createThemeEmbed('Category Set', `New tickets will be created under category ID: ${categoryId}`, themeColors.success)
+        ]});
+      }
+
+      // Deploy ticket panel
+      if (command === 'deployticketpanel') {
+        if (!hasPremiumPermissions(message.member)) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Access Denied', 'You need premium permissions to deploy ticket panels!', themeColors.error)
+          ]});
+        }
+        
+        const settings = botData.ticketSettings[message.guild.id];
+        if (!settings || !settings.message || !settings.options) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Incomplete Setup', 'Please set up ticket message and options first!', themeColors.warning)
+          ]});
+        }
+
+        const selectMenu = new ActionRowBuilder().addComponents(
+          new StringSelectMenuBuilder()
+            .setCustomId('ticket_type')
+            .setPlaceholder('Select a ticket type')
+            .addOptions(settings.options.map(opt => ({
+              label: opt.name,
+              value: opt.name.toLowerCase(),
+              emoji: opt.emoji
+            })))
+        );
+
+        const embed = createThemeEmbed('Create a Ticket', settings.message, themeColors.primary)
+          .setFooter({ 
+            text: `${message.guild.name} Ticket System`, 
+            iconURL: message.guild.iconURL() 
+          });
+
+        await message.channel.send({ embeds: [embed], components: [selectMenu] });
+        await message.reply({ embeds: [
+          createThemeEmbed('Panel Deployed', 'Ticket panel deployed successfully!', themeColors.success)
+        ]}).then(msg => setTimeout(() => msg.delete(), 5000));
+      }
+    } catch (error) {
+      handleError(error, message);
+    }
+  });
+
+  // Ticket creation interaction
+  client.on('interactionCreate', async interaction => {
+    if (!interaction.isStringSelectMenu() || interaction.customId !== 'ticket_type') return;
+
+    try {
+      await interaction.deferReply({ ephemeral: true });
+      const settings = botData.ticketSettings[interaction.guild.id];
+      if (!settings) {
+        return interaction.editReply({ embeds: [
+          createThemeEmbed('Configuration Error', 'Ticket system not configured properly on this server.', themeColors.error)
+        ]});
+      }
+
+      const ticketType = interaction.values[0];
+      const ticketName = `ticket-${ticketType}-${interaction.user.username}-${Date.now().toString().slice(-4)}`;
+      const category = interaction.guild.channels.cache.get(settings.categoryId);
+
+      if (!category || category.type !== ChannelType.GuildCategory) {
+        return interaction.editReply({ embeds: [
+          createThemeEmbed('Category Error', 'Ticket category not found or invalid. Contact server admin.', themeColors.error)
+        ]});
+      }
+
+      // Create the ticket channel
+      const ticketChannel = await interaction.guild.channels.create({
+        name: ticketName,
+        type: ChannelType.GuildText,
+        parent: category.id,
+        permissionOverwrites: [
+          {
+            id: interaction.guild.id,
+            deny: [PermissionFlagsBits.ViewChannel]
+          },
+          {
+            id: interaction.user.id,
+            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages]
+          },
+          ...(settings.viewerRole ? [{
+            id: settings.viewerRole,
+            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages]
+          }] : [])
+        ]
+      });
+
+      // Create ticket control buttons
+      const buttons = createThemeActionRow([
+        createThemeButton('claim_ticket', 'Claim', '🔒'),
+        createThemeButton('lock_ticket', 'Lock', '🔐', ButtonStyle.Secondary),
+        createThemeButton('close_ticket', 'Close', '❌', ButtonStyle.Danger)
+      ]);
+
+      // Create welcome embed
+      const welcomeEmbed = createThemeEmbed(
+        `${ticketType.charAt(0).toUpperCase() + ticketType.slice(1)} Ticket`,
+        `Hello ${interaction.user.toString()}! Support will be with you shortly.\n\nPlease describe your issue in detail.`,
+        themeColors.primary
+      )
+      .addFields(
+        { name: 'Ticket Type', value: ticketType, inline: true },
+        { name: 'Created By', value: interaction.user.toString(), inline: true }
+      )
+      .setFooter({ 
+        text: `${interaction.guild.name} Ticket System`, 
+        iconURL: interaction.guild.iconURL() 
+      });
+
+      // Send welcome message to ticket channel
+      await ticketChannel.send({ 
+        content: `${interaction.user.toString()} ${settings.viewerRole ? `<@&${settings.viewerRole}>` : ''}`,
+        embeds: [welcomeEmbed], 
+        components: [buttons] 
+      });
+
+      // Send success message to user
+      await interaction.editReply({ embeds: [
+        createThemeEmbed('Ticket Created', `Your ticket has been created: ${ticketChannel.toString()}`, themeColors.success)
+      ]});
+    } catch (error) {
+      handleError(error, interaction);
+    }
+  });
+
+  // Ticket button interactions
+  client.on('interactionCreate', async interaction => {
+    if (!interaction.isButton() || !interaction.channel?.name?.startsWith('ticket-')) return;
+
+    try {
+      const ticketChannel = interaction.channel;
+      const ticketName = ticketChannel.name;
+      const ticketType = ticketName.split('-')[1];
+      const creatorId = ticketChannel.permissionOverwrites.cache.find(ow => ow.type === 1)?.id;
+      const creator = await client.users.fetch(creatorId).catch(() => null);
+
+      // Claim ticket button
+      if (interaction.customId === 'claim_ticket') {
+        if (!hasPremiumPermissions(interaction.member)) {
+          return interaction.reply({ 
+            embeds: [
+              createThemeEmbed('Access Denied', 'You need premium permissions to claim tickets!', themeColors.error)
+            ], 
+            ephemeral: true 
+          });
+        }
+
+        await ticketChannel.permissionOverwrites.edit(interaction.user.id, {
+          ViewChannel: true,
+          SendMessages: true
+        });
+
+        const claimEmbed = createThemeEmbed('Ticket Claimed', 
+          `This ticket has been claimed by ${interaction.user.toString()}`, themeColors.accent)
+          .setFooter({ 
+            text: 'Please wait for their response', 
+            iconURL: interaction.user.displayAvatarURL() 
+          });
+
+        await interaction.reply({ embeds: [claimEmbed] });
+      }
+
+      // Lock ticket button
+      if (interaction.customId === 'lock_ticket') {
+        if (!hasPremiumPermissions(interaction.member)) {
+          return interaction.reply({ 
+            embeds: [
+              createThemeEmbed('Access Denied', 'You need premium permissions to lock tickets!', themeColors.error)
+            ], 
+            ephemeral: true 
+          });
+        }
+
+        await ticketChannel.permissionOverwrites.edit(creatorId, {
+          SendMessages: false
+        });
+
+        const lockEmbed = createThemeEmbed('Ticket Locked', 
+          `This ticket has been locked by ${interaction.user.toString()}`, themeColors.warning)
+          .setFooter({ 
+            text: 'Only staff can send messages now', 
+            iconURL: interaction.user.displayAvatarURL() 
+          });
+
+        await interaction.reply({ embeds: [lockEmbed] });
+      }
+
+      // Close ticket button
+      if (interaction.customId === 'close_ticket') {
+        if (!hasPremiumPermissions(interaction.member)) {
+          return interaction.reply({ 
+            embeds: [
+              createThemeEmbed('Access Denied', 'You need premium permissions to close tickets!', themeColors.error)
+            ], 
+            ephemeral: true 
+          });
+        }
+
+        // Ask for close reason
+        const reasonEmbed = createThemeEmbed('Close Ticket', 
+          'Please provide a reason for closing this ticket (or type "none"):', themeColors.warning);
+        
+        await interaction.reply({ embeds: [reasonEmbed] });
+
+        // Collect reason
+        const filter = m => m.author.id === interaction.user.id;
+        const collector = interaction.channel.createMessageCollector({ filter, time: 30000 });
+
+        collector.on('collect', async m => {
+          collector.stop();
+          const reason = m.content.toLowerCase() === 'none' ? 'No reason provided' : m.content;
+
+          const closeEmbed = createThemeEmbed('Closing Ticket', 
+            'This ticket will be closed in 10 seconds...', themeColors.error)
+            .addFields({ name: 'Reason', value: reason })
+            .setFooter({ 
+              text: 'A transcript will be sent to the creator', 
+              iconURL: interaction.guild.iconURL() 
+            });
+
+          await interaction.editReply({ embeds: [closeEmbed] });
+          await m.delete().catch(() => {});
+
+          setTimeout(async () => {
+            try {
+              const channel = await interaction.guild.channels.fetch(ticketChannel.id).catch(() => null);
+              if (!channel) {
+                console.log(`Ticket channel ${ticketChannel.id} already deleted`);
+                return;
+              }
+
+              // Create transcript embed
+              const dmEmbed = createThemeEmbed('Ticket Closed', 
+                'Your ticket has been closed by staff.', themeColors.info)
+                .addFields(
+                  { name: '🆔 Ticket ID', value: ticketChannel.id, inline: true },
+                  { name: '🟢 Opened By', value: creator?.toString() || 'Unknown', inline: true },
+                  { name: '🔴 Closed By', value: interaction.user.toString(), inline: true },
+                  { name: '⏰ Open Time', value: new Date(ticketChannel.createdTimestamp).toLocaleString(), inline: true },
+                  { name: '🕓 Closed At', value: new Date().toLocaleString(), inline: true },
+                  { name: '📝 Close Reason', value: reason, inline: false }
+                )
+                .setThumbnail(interaction.guild.iconURL());
+
+              try {
+                if (creator) await creator.send({ embeds: [dmEmbed] });
+              } catch (e) {
+                console.log('Could not send DM to ticket creator');
+              }
+
+              // Delete the ticket channel
+              await ticketChannel.delete('Ticket closed by staff').catch(e => {
+                console.error(`Failed to delete ticket channel ${ticketChannel.id}:`, e);
+              });
+            } catch (error) {
+              console.error('Error in ticket closing process:', error);
+            }
+          }, 10000);
+        });
+
+        collector.on('end', (collected, reason) => {
+          if (reason === 'time') {
+            interaction.editReply({ 
+              embeds: [createThemeEmbed('Timed Out', 'No reason provided, closing ticket...', themeColors.error)]
+            });
+            
+            setTimeout(async () => {
+              try {
+                const channel = await interaction.guild.channels.fetch(ticketChannel.id).catch(() => null);
+                if (!channel) return;
+
+                const dmEmbed = createThemeEmbed('Ticket Closed', 
+                  'Your ticket has been closed by staff.', themeColors.info)
+                  .addFields(
+                    { name: '🆔 Ticket ID', value: ticketChannel.id, inline: true },
+                    { name: '🟢 Opened By', value: creator?.toString() || 'Unknown', inline: true },
+                    { name: '🔴 Closed By', value: interaction.user.toString(), inline: true },
+                    { name: '⏰ Open Time', value: new Date(ticketChannel.createdTimestamp).toLocaleString(), inline: true },
+                    { name: '🕓 Closed At', value: new Date().toLocaleString(), inline: true },
+                    { name: '📝 Close Reason', value: 'No reason provided', inline: false }
+                  )
+                  .setThumbnail(interaction.guild.iconURL());
+
+                try {
+                  if (creator) await creator.send({ embeds: [dmEmbed] });
+                } catch (e) {
+                  console.log('Could not send DM to ticket creator');
+                }
+
+                await ticketChannel.delete('Ticket closed by staff').catch(console.error);
+              } catch (error) {
+                console.error('Error in ticket closing process:', error);
+              }
+            }, 10000);
+          }
+        });
+      }
+    } catch (error) {
+      handleError(error, interaction);
+    }
+  });
+}
+
+// Application system
+function setupApplicationSystem() {
+  client.on('messageCreate', async message => {
+    if (!message.content.startsWith('!') || message.author.bot) return;
+    
+    const args = message.content.slice(1).trim().split(/ +/);
+    const command = args.shift().toLowerCase();
+
+    try {
+      // Set application message
+      if (command === 'app' && args[0] === 'msg') {
+        if (!hasPremiumPermissions(message.member)) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Access Denied', 'You need premium permissions to set up applications!', themeColors.error)
+          ]});
+        }
+        
+        const appMsg = args.slice(1).join(' ');
+        botData.applicationSettings[message.guild.id] = botData.applicationSettings[message.guild.id] || {};
+        botData.applicationSettings[message.guild.id].message = appMsg;
+
+        await message.reply({ embeds: [
+          createThemeEmbed('Application Message Set', 'The application panel message has been configured.', themeColors.success)
+            .addFields({ name: 'Message', value: appMsg || 'Not provided' })
+        ]});
+      }
+
+      // Add application options
+      if (command === 'addoptions') {
+        if (!hasPremiumPermissions(message.member)) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Access Denied', 'You need premium permissions to set application options!', themeColors.error)
+          ]});
+        }
+        
+        const options = args.join(' ').split(',').map(opt => opt.trim());
+        const formattedOptions = options.map(opt => {
+          // Remove @ symbol if present and split by :
+          const cleanOpt = opt.replace(/^@/, '');
+          const [name, emoji] = cleanOpt.split(':').map(part => part.trim());
+          return { 
+            name, 
+            emoji: emoji || '📋',
+            // Store clean name without @
+            cleanName: name.replace(/^@/, '') 
+          };
+        });
+
+        botData.applicationSettings[message.guild.id] = botData.applicationSettings[message.guild.id] || {};
+        botData.applicationSettings[message.guild.id].options = formattedOptions;
+
+        await message.reply({ embeds: [
+          createThemeEmbed('Application Options Set', 'The application role buttons have been configured.', themeColors.success)
+            .addFields({
+              name: 'Options', 
+              value: formattedOptions.map(opt => `${opt.emoji} ${opt.name}`).join('\n')
+            })
+        ]});
+      }
+
+      // Set application channel
+      if (command === 'setappchannel') {
+        if (!hasPremiumPermissions(message.member)) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Access Denied', 'You need premium permissions to set the application channel!', themeColors.error)
+          ]});
+        }
+        
+        const channelId = args[0];
+        if (!channelId) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Missing Channel', 'Please provide a valid channel ID!', themeColors.warning)
+          ]});
+        }
+
+        botData.applicationSettings[message.guild.id] = botData.applicationSettings[message.guild.id] || {};
+        botData.applicationSettings[message.guild.id].channelId = channelId;
+
+        await message.reply({ embeds: [
+          createThemeEmbed('Channel Set', `New applications will be sent to channel ID: ${channelId}`, themeColors.success)
+        ]});
+      }
+
+      // Deploy application panel
+      if (command === 'deployapp') {
+        if (!hasPremiumPermissions(message.member)) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Access Denied', 'You need premium permissions to deploy application panels!', themeColors.error)
+          ]});
+        }
+        
+        const settings = botData.applicationSettings[message.guild.id];
+        if (!settings || !settings.message || !settings.options) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Incomplete Setup', 'Please set up application message and options first!', themeColors.warning)
+          ]});
+        }
+
+        const buttons = createThemeActionRow(
+          settings.options.map(opt => 
+            createThemeButton(
+              `app_${opt.cleanName.toLowerCase()}`, 
+              opt.name, 
+              opt.emoji
+            )
+          )
+        );
+
+        const embed = createThemeEmbed('Application System', settings.message, themeColors.primary)
+          .setFooter({ 
+            text: `${message.guild.name} Applications`, 
+            iconURL: message.guild.iconURL() 
+          });
+
+        await message.channel.send({ embeds: [embed], components: [buttons] });
+        await message.reply({ embeds: [
+          createThemeEmbed('Panel Deployed', 'Application panel deployed successfully!', themeColors.success)
+        ]}).then(msg => setTimeout(() => msg.delete(), 5000));
+      }
+
+      // Set application questions
+      if (command.startsWith('ques')) {
+        const questionNum = parseInt(command.replace('ques', ''));
+        if (isNaN(questionNum)) return;
+
+        if (!hasPremiumPermissions(message.member)) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Access Denied', 'You need premium permissions to set application questions!', themeColors.error)
+          ]});
+        }
+        
+        const question = args.join(' ');
+        botData.applicationSettings[message.guild.id] = botData.applicationSettings[message.guild.id] || {};
+        botData.applicationSettings[message.guild.id].questions = botData.applicationSettings[message.guild.id].questions || [];
+        botData.applicationSettings[message.guild.id].questions[questionNum - 1] = question;
+
+        await message.reply({ embeds: [
+          createThemeEmbed(`Question ${questionNum} Set`, 'This question will be asked to applicants.', themeColors.success)
+            .addFields({ name: 'Question', value: question })
+        ]});
+      }
+    } catch (error) {
+      handleError(error, message);
+    }
+  });
+
+  // Application button interaction
+  client.on('interactionCreate', async interaction => {
+    if (!interaction.isButton() || !interaction.customId.startsWith('app_')) return;
+
+    try {
+      await interaction.deferReply({ ephemeral: true });
+      const settings = botData.applicationSettings[interaction.guild.id];
+      if (!settings || !settings.questions || settings.questions.length === 0) {
+        return interaction.editReply({ embeds: [
+          createThemeEmbed('Configuration Error', 'Application system not properly configured on this server.', themeColors.error)
+        ]});
+      }
+
+      const roleName = interaction.customId.replace('app_', '');
+      // Find role by name (case insensitive, without @ symbol)
+      const role = interaction.guild.roles.cache.find(r => 
+        r.name.toLowerCase() === roleName.toLowerCase()
+      );
+      
+      if (!role) {
+        return interaction.editReply({ embeds: [
+          createThemeEmbed('Role Error', 
+            `The role "${roleName}" doesn't exist. ` +
+            'Please contact an admin to fix this.', 
+            themeColors.error)
+        ]});
+      }
+
+      // Store application data with role ID and name
+      botData.applicationSettings[interaction.user.id] = {
+        guildId: interaction.guild.id,
+        roleId: role.id,
+        roleName: role.name,
+        answers: [],
+        currentQuestion: 0
+      };
+
+      try {
+        // Send first question via DM
+        const questionEmbed = createThemeEmbed(
+          `Application for ${role.name}`,
+          settings.questions[0],
+          themeColors.primary
+        )
+        .setFooter({ 
+          text: 'Reply with your answer. Type "cancel" to stop.', 
+          iconURL: interaction.guild.iconURL() 
+        });
+
+        await interaction.user.send({ embeds: [questionEmbed] });
+        await interaction.editReply({ embeds: [
+          createThemeEmbed('Check DMs', 'Please check your DMs for the first question!', themeColors.success)
+        ]});
+      } catch (e) {
+        return interaction.editReply({ embeds: [
+          createThemeEmbed('DM Error', 'I couldn\'t send you a DM. Please enable DMs and try again.', themeColors.error)
+        ]});
+      }
+
+      // Set up DM collector for application answers
+      const filter = m => m.author.id === interaction.user.id && m.channel.type === ChannelType.DM;
+      const collector = interaction.client.channels.cache
+        .find(c => c.type === ChannelType.DM && c.recipient?.id === interaction.user.id)
+        ?.createMessageCollector({ filter, time: 600000 });
+
+      if (!collector) {
+        return interaction.editReply({ embeds: [
+          createThemeEmbed('Error', 'Failed to set up question collector. Please try again.', themeColors.error)
+        ]});
+      }
+
+      collector.on('collect', async m => {
+        if (m.content.toLowerCase() === 'cancel') {
+          collector.stop();
+          await interaction.user.send({ embeds: [
+            createThemeEmbed('Application Cancelled', 'Your application has been cancelled.', themeColors.error)
+          ]});
+          delete botData.applicationSettings[interaction.user.id];
+          return;
+        }
+
+        const appData = botData.applicationSettings[interaction.user.id];
+        appData.answers.push(m.content);
+        appData.currentQuestion++;
+
+        if (appData.currentQuestion < settings.questions.length) {
+          // Send next question
+          const nextQuestionEmbed = createThemeEmbed(
+            `Question ${appData.currentQuestion + 1}`,
+            settings.questions[appData.currentQuestion],
+            themeColors.primary
+          )
+          .setFooter({ 
+            text: 'Reply with your answer. Type "cancel" to stop.', 
+            iconURL: interaction.guild.iconURL() 
+          });
+
+          await interaction.user.send({ embeds: [nextQuestionEmbed] });
+        } else {
+          // All questions answered, submit application
+          collector.stop();
+          await submitApplication(interaction, appData);
+        }
+      });
+
+      collector.on('end', (collected, reason) => {
+        if (reason === 'time') {
+          interaction.user.send({ embeds: [
+            createThemeEmbed('Application Timed Out', 'You took too long to answer the questions.', themeColors.error)
+          ]}).catch(() => {});
+        }
+        delete botData.applicationSettings[interaction.user.id];
+      });
+    } catch (error) {
+      handleError(error, interaction);
+    }
+  });
+
+  // Submit application function
+  async function submitApplication(interaction, appData) {
+    try {
+      const settings = botData.applicationSettings[appData.guildId];
+      const guild = client.guilds.cache.get(appData.guildId);
+      const appChannel = guild.channels.cache.get(settings.channelId);
+
+      if (!appChannel) {
+        await interaction.user.send({ embeds: [
+          createThemeEmbed('Error', 'Application channel not found. Contact server admin.', themeColors.error)
+        ]});
+        return;
+      }
+
+      // Create application review buttons
+      const buttons = createThemeActionRow([
+        createThemeButton('accept_app', 'Accept', '✅', ButtonStyle.Success),
+        createThemeButton('reject_app', 'Reject', '❌', ButtonStyle.Danger)
+      ]);
+
+      // Create application embed
+      const appEmbed = createThemeEmbed(
+        `Application for ${appData.roleName}`,
+        `Applicant: ${interaction.user.toString()}`,
+        themeColors.primary
+      )
+      .setThumbnail(interaction.user.displayAvatarURL());
+
+      // Add all questions and answers
+      settings.questions.forEach((question, i) => {
+        appEmbed.addFields({ 
+          name: `❓ ${question}`, 
+          value: appData.answers[i] || 'No answer provided' 
+        });
+      });
+
+      // Send application to review channel
+      await appChannel.send({ 
+        content: `New application from ${interaction.user.toString()} for ${appData.roleName}`,
+        embeds: [appEmbed], 
+        components: [buttons] 
+      });
+
+      // Notify applicant
+      await interaction.user.send({ embeds: [
+        createThemeEmbed('Application Submitted', 
+          `Your application for ${appData.roleName} has been submitted successfully.`, themeColors.success)
+          .setFooter({ 
+            text: 'You will be notified when a decision is made.', 
+            iconURL: guild.iconURL() 
+          })
+      ]});
+    } catch (error) {
+      handleError(error, interaction);
+    }
+  }
+
+  // Application review button interaction
+  client.on('interactionCreate', async interaction => {
+    if (!interaction.isButton() || !['accept_app', 'reject_app'].includes(interaction.customId)) return;
+    if (!interaction.message.embeds[0].title.includes('Application for')) return;
+
+    try {
+      await interaction.deferReply({ ephemeral: true });
+      
+      const appEmbed = interaction.message.embeds[0];
+      const applicantId = appEmbed.description.match(/<@!?(\d+)>/)[1];
+      const applicant = interaction.guild.members.cache.get(applicantId);
+      
+      if (!applicant) {
+        return interaction.editReply({ embeds: [
+          createThemeEmbed('Error', 'Could not find the applicant in this server.', themeColors.error)
+        ]});
+      }
+
+      // Extract role name from the embed title
+      const roleName = appEmbed.title.replace('Application for ', '');
+      const role = interaction.guild.roles.cache.find(r => r.name === roleName);
+
+      // Accept application
+      if (interaction.customId === 'accept_app') {
+        await applicant.roles.add(role);
+
+        const acceptEmbed = createThemeEmbed(
+          `Application Accepted!`,
+          `Congratulations! Your application for ${role.name} in ${interaction.guild.name} has been accepted.`,
+          themeColors.success
+        )
+        .addFields(
+          { name: 'Accepted By', value: interaction.user.toString(), inline: true },
+          { name: 'Accepted At', value: new Date().toLocaleString(), inline: true }
+        )
+        .setThumbnail(interaction.guild.iconURL());
+
+        try {
+          await applicant.send({ embeds: [acceptEmbed] });
+        } catch (e) {
+          console.log('Could not send DM to applicant');
+        }
+
+        await interaction.editReply({ embeds: [
+          createThemeEmbed('Success', 'Application accepted and role assigned!', themeColors.success)
+        ]});
+      } 
+      // Reject application
+      else {
+        const rejectEmbed = createThemeEmbed(
+          `Application Rejected`,
+          `Your application for ${role.name} in ${interaction.guild.name} has been rejected.`,
+          themeColors.error
+        )
+        .addFields(
+          { name: 'Rejected By', value: interaction.user.toString(), inline: true },
+          { name: 'Rejected At', value: new Date().toLocaleString(), inline: true }
+        )
+        .setFooter({ 
+          text: 'You may reapply if you wish', 
+          iconURL: interaction.guild.iconURL() 
+        });
+
+        try {
+          await applicant.send({ embeds: [rejectEmbed] });
+        } catch (e) {
+          console.log('Could not send DM to applicant');
+        }
+
+        await interaction.editReply({ embeds: [
+          createThemeEmbed('Success', 'Application rejected and applicant notified!', themeColors.success)
+        ]});
+      }
+
+      // Update the application message
+      const updatedEmbed = new EmbedBuilder(appEmbed.data)
+        .setColor(interaction.customId === 'accept_app' ? themeColors.success : themeColors.error)
+        .setTitle(`📋 ${interaction.customId === 'accept_app' ? '✅ Accepted' : '❌ Rejected'}: ${roleName}`);
+
+      await interaction.message.edit({ embeds: [updatedEmbed], components: [] });
+    } catch (error) {
+      handleError(error, interaction);
     }
   });
 }
@@ -845,20 +2148,37 @@ function setupWarningSystem() {
 function setupMiniGames() {
   client.on('messageCreate', async message => {
     if (!message.content.startsWith('!') || message.author.bot) return;
-
+    
     const args = message.content.slice(1).trim().split(/ +/);
     const command = args.shift().toLowerCase();
 
     try {
+      // Rock Paper Scissors game
       if (command === 'rps') {
         const opponent = message.mentions.users.first();
-        if (!opponent) return message.reply('❌ Please mention a user to play with!');
-        if (opponent.bot) return message.reply('❌ You can\'t play with bots!');
-        if (opponent.id === message.author.id) return message.reply('❌ You can\'t play with yourself!');
+        if (!opponent) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Invalid Opponent', 'Please mention a user to play with!', themeColors.warning)
+          ]});
+        }
+        
+        if (opponent.bot) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Invalid Opponent', 'You can\'t play with bots!', themeColors.warning)
+          ]});
+        }
+        
+        if (opponent.id === message.author.id) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Invalid Opponent', 'You can\'t play with yourself!', themeColors.warning)
+          ]});
+        }
 
         const gameId = `${message.author.id}-${opponent.id}-rps`;
         if (botData.games.has(gameId)) {
-          return message.reply('❌ There\'s already an ongoing game between these players!');
+          return message.reply({ embeds: [
+            createThemeEmbed('Game Exists', 'There\'s already an ongoing game between these players!', themeColors.warning)
+          ]});
         }
 
         botData.games.set(gameId, {
@@ -866,29 +2186,22 @@ function setupMiniGames() {
           choices: {}
         });
 
-        const buttons = new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId('rps_rock')
-            .setLabel('Rock')
-            .setEmoji({ name: '🪨' })
-            .setStyle(ButtonStyle.Primary),
-          new ButtonBuilder()
-            .setCustomId('rps_paper')
-            .setLabel('Paper')
-            .setEmoji({ name: '📄' })
-            .setStyle(ButtonStyle.Primary),
-          new ButtonBuilder()
-            .setCustomId('rps_scissors')
-            .setLabel('Scissors')
-            .setEmoji({ name: '✂️' })
-            .setStyle(ButtonStyle.Primary)
-        );
+        // Create RPS buttons
+        const buttons = createThemeActionRow([
+          createThemeButton('rps_rock', 'Rock', '🪨'),
+          createThemeButton('rps_paper', 'Paper', '📄'),
+          createThemeButton('rps_scissors', 'Scissors', '✂️')
+        ]);
 
-        const embed = new EmbedBuilder()
-          .setColor('#5865F2')
-          .setTitle('🪨 Rock, 📄 Paper, ✂️ Scissors')
-          .setDescription(`${message.author.toString()} has challenged ${opponent.toString()} to a game!\n\nBoth players must select their choice.`)
-          .setFooter({ text: 'Game will timeout in 60 seconds', iconURL: message.guild.iconURL() });
+        const embed = createThemeEmbed(
+          'Rock, Paper, Scissors',
+          `${message.author.toString()} has challenged ${opponent.toString()} to a game!\n\nBoth players must select their choice.`,
+          themeColors.games
+        )
+        .setFooter({ 
+          text: 'Game will timeout in 60 seconds', 
+          iconURL: message.guild.iconURL() 
+        });
 
         const gameMessage = await message.channel.send({ 
           content: `${message.author.toString()} ${opponent.toString()}`,
@@ -896,20 +2209,24 @@ function setupMiniGames() {
           components: [buttons] 
         });
 
+        // Set timeout for game
         setTimeout(() => {
           if (botData.games.has(gameId)) {
             botData.games.delete(gameId);
-            embed.setColor('#FF0000')
+            embed.setColor(themeColors.error)
               .setDescription('⏰ Game timed out due to inactivity.');
             gameMessage.edit({ embeds: [embed], components: [] }).catch(console.error);
           }
         }, 60000);
       }
 
+      // Number guessing game
       if (command === 'guess') {
         const gameId = `${message.author.id}-guess`;
         if (botData.games.has(gameId)) {
-          return message.reply('❌ You already have an ongoing guessing game!');
+          return message.reply({ embeds: [
+            createThemeEmbed('Game Exists', 'You already have an ongoing guessing game!', themeColors.warning)
+          ]});
         }
 
         const number = Math.floor(Math.random() * 100) + 1;
@@ -918,14 +2235,19 @@ function setupMiniGames() {
           attempts: 0
         });
 
-        const embed = new EmbedBuilder()
-          .setColor('#5865F2')
-          .setTitle('🔢 Number Guessing Game')
-          .setDescription('I\'ve picked a number between 1 and 100. Try to guess it!')
-          .setFooter({ text: 'Type your guesses in chat. Game will timeout in 2 minutes.', iconURL: message.guild.iconURL() });
+        const embed = createThemeEmbed(
+          'Number Guessing Game',
+          'I\'ve picked a number between 1 and 100. Try to guess it!',
+          themeColors.games
+        )
+        .setFooter({ 
+          text: 'Type your guesses in chat. Game will timeout in 2 minutes.', 
+          iconURL: message.guild.iconURL() 
+        });
 
         await message.channel.send({ embeds: [embed] });
 
+        // Set up guess collector
         const filter = m => m.author.id === message.author.id && !isNaN(m.content);
         const collector = message.channel.createMessageCollector({ filter, time: 120000 });
 
@@ -935,18 +2257,24 @@ function setupMiniGames() {
           game.attempts++;
 
           if (guess === game.number) {
-            const winEmbed = new EmbedBuilder()
-              .setColor('#00FF00')
-              .setTitle('🎉 You Win!')
-              .setDescription(`You guessed the number ${game.number} correctly in ${game.attempts} attempts!`)
-              .setFooter({ text: 'Game over', iconURL: message.author.displayAvatarURL() });
+            const winEmbed = createThemeEmbed(
+              'You Win!',
+              `You guessed the number ${game.number} correctly in ${game.attempts} attempts!`,
+              themeColors.success
+            )
+            .setFooter({ 
+              text: 'Game over', 
+              iconURL: message.author.displayAvatarURL() 
+            });
 
             await message.channel.send({ embeds: [winEmbed] });
             botData.games.delete(gameId);
             collector.stop();
           } else {
             const hint = guess < game.number ? 'higher' : 'lower';
-            await message.channel.send(`❌ Wrong! Try a ${hint} number.`);
+            await message.channel.send({ embeds: [
+              createThemeEmbed('Wrong Guess', `Try a ${hint} number.`, themeColors.warning)
+            ]});
           }
         });
 
@@ -954,11 +2282,15 @@ function setupMiniGames() {
           if (reason === 'time') {
             const game = botData.games.get(gameId);
             if (game) {
-              const timeoutEmbed = new EmbedBuilder()
-                .setColor('#FF0000')
-                .setTitle('⏰ Game Over')
-                .setDescription(`Time's up! The number was ${game.number}.`)
-                .setFooter({ text: 'Better luck next time!', iconURL: message.guild.iconURL() });
+              const timeoutEmbed = createThemeEmbed(
+                'Game Over',
+                `Time's up! The number was ${game.number}.`,
+                themeColors.error
+              )
+              .setFooter({ 
+                text: 'Better luck next time!', 
+                iconURL: message.guild.iconURL() 
+              });
 
               message.channel.send({ embeds: [timeoutEmbed] });
               botData.games.delete(gameId);
@@ -967,6 +2299,7 @@ function setupMiniGames() {
         });
       }
 
+      // Math challenge game
       if (command === 'math') {
         const operations = ['+', '-', '*', '/'];
         const operation = operations[Math.floor(Math.random() * operations.length)];
@@ -1000,11 +2333,15 @@ function setupMiniGames() {
           answer: answer,
           timeout: setTimeout(() => {
             if (botData.games.has(gameId)) {
-              const timeoutEmbed = new EmbedBuilder()
-                .setColor('#FF0000')
-                .setTitle('⏰ Time\'s Up!')
-                .setDescription(`The correct answer was ${answer}.`)
-                .setFooter({ text: 'Better luck next time!', iconURL: message.guild.iconURL() });
+              const timeoutEmbed = createThemeEmbed(
+                'Time\'s Up!',
+                `The correct answer was ${answer}.`,
+                themeColors.error
+              )
+              .setFooter({ 
+                text: 'Better luck next time!', 
+                iconURL: message.guild.iconURL() 
+              });
 
               message.channel.send({ embeds: [timeoutEmbed] });
               botData.games.delete(gameId);
@@ -1012,14 +2349,19 @@ function setupMiniGames() {
           }, 15000)
         });
 
-        const embed = new EmbedBuilder()
-          .setColor('#5865F2')
-          .setTitle('🧮 Math Challenge')
-          .setDescription(`Solve this problem: **${num1} ${operation} ${num2} = ?**`)
-          .setFooter({ text: 'You have 15 seconds to answer!', iconURL: message.guild.iconURL() });
+        const embed = createThemeEmbed(
+          'Math Challenge',
+          `Solve this problem: **${num1} ${operation} ${num2} = ?**`,
+          themeColors.games
+        )
+        .setFooter({ 
+          text: 'You have 15 seconds to answer!', 
+          iconURL: message.guild.iconURL() 
+        });
 
         await message.channel.send({ embeds: [embed] });
 
+        // Set up answer collector
         const filter = m => m.author.id === message.author.id && !isNaN(m.content);
         const collector = message.channel.createMessageCollector({ filter, time: 15000 });
 
@@ -1029,21 +2371,28 @@ function setupMiniGames() {
 
           if (guess === game.answer) {
             clearTimeout(game.timeout);
-            const winEmbed = new EmbedBuilder()
-              .setColor('#00FF00')
-              .setTitle('✅ Correct!')
-              .setDescription(`You solved it! ${num1} ${operation} ${num2} = ${answer}`)
-              .setFooter({ text: 'Great job!', iconURL: message.author.displayAvatarURL() });
+            const winEmbed = createThemeEmbed(
+              'Correct!',
+              `You solved it! ${num1} ${operation} ${num2} = ${answer}`,
+              themeColors.success
+            )
+            .setFooter({ 
+              text: 'Great job!', 
+              iconURL: message.author.displayAvatarURL() 
+            });
 
             await message.channel.send({ embeds: [winEmbed] });
             botData.games.delete(gameId);
             collector.stop();
           } else {
-            await message.channel.send('❌ Incorrect! Try again.');
+            await message.channel.send({ embeds: [
+              createThemeEmbed('Incorrect!', 'Try again.', themeColors.warning)
+            ]});
           }
         });
       }
 
+      // Trivia game
       if (command === 'trivia') {
         const triviaQuestions = [
           {
@@ -1080,11 +2429,15 @@ function setupMiniGames() {
           answer: question.answer,
           timeout: setTimeout(() => {
             if (botData.games.has(gameId)) {
-              const timeoutEmbed = new EmbedBuilder()
-                .setColor('#FF0000')
-                .setTitle('⏰ Time\'s Up!')
-                .setDescription(`The correct answer was: **${question.options[question.answer]}**`)
-                .setFooter({ text: 'Better luck next time!', iconURL: message.guild.iconURL() });
+              const timeoutEmbed = createThemeEmbed(
+                'Time\'s Up!',
+                `The correct answer was: **${question.options[question.answer]}`,
+                themeColors.error
+              )
+              .setFooter({ 
+                text: 'Better luck next time!', 
+                iconURL: message.guild.iconURL() 
+              });
 
               message.channel.send({ embeds: [timeoutEmbed] });
               botData.games.delete(gameId);
@@ -1092,24 +2445,31 @@ function setupMiniGames() {
           }, 15000)
         });
 
-        const buttons = new ActionRowBuilder().addComponents(
+        // Create trivia buttons
+        const buttons = createThemeActionRow(
           question.options.map((option, index) => 
-            new ButtonBuilder()
-              .setCustomId(`trivia_${index}`)
-              .setLabel(option)
-              .setStyle(ButtonStyle.Primary)
+            createThemeButton(
+              `trivia_${index}`, 
+              option, 
+              null
+            )
           )
         );
 
-        const embed = new EmbedBuilder()
-          .setColor('#5865F2')
-          .setTitle('❓ Trivia Question')
-          .setDescription(question.question)
-          .setFooter({ text: 'You have 15 seconds to answer!', iconURL: message.guild.iconURL() });
+        const embed = createThemeEmbed(
+          'Trivia Question',
+          question.question,
+          themeColors.games
+        )
+        .setFooter({ 
+          text: 'You have 15 seconds to answer!', 
+          iconURL: message.guild.iconURL() 
+        });
 
         await message.channel.send({ embeds: [embed], components: [buttons] });
       }
 
+      // Typing test game
       if (command === 'type') {
         const sentences = [
           "The quick brown fox jumps over the lazy dog.",
@@ -1127,14 +2487,19 @@ function setupMiniGames() {
           startTime: Date.now()
         });
 
-        const embed = new EmbedBuilder()
-          .setColor('#5865F2')
-          .setTitle('⌨️ Typing Speed Test')
-          .setDescription(`Type the following sentence as fast as you can:\n\n**${sentence}**`)
-          .setFooter({ text: 'The timer starts now!', iconURL: message.guild.iconURL() });
+        const embed = createThemeEmbed(
+          'Typing Speed Test',
+          `Type the following sentence as fast as you can:\n\n**${sentence}**`,
+          themeColors.games
+        )
+        .setFooter({ 
+          text: 'The timer starts now!', 
+          iconURL: message.guild.iconURL() 
+        });
 
         await message.channel.send({ embeds: [embed] });
 
+        // Set up typing test collector
         const filter = m => m.author.id === message.author.id;
         const collector = message.channel.createMessageCollector({ filter, time: 60000 });
 
@@ -1144,32 +2509,42 @@ function setupMiniGames() {
             const timeTaken = (Date.now() - game.startTime) / 1000;
             const wpm = Math.round((sentence.split(' ').length / timeTaken) * 60);
 
-            const resultEmbed = new EmbedBuilder()
-              .setColor('#00FF00')
-              .setTitle('🏁 Test Completed!')
-              .setDescription(`You typed the sentence correctly in ${timeTaken.toFixed(2)} seconds!`)
-              .addFields(
-                { name: 'Words Per Minute', value: wpm.toString(), inline: true },
-                { name: 'Characters', value: sentence.length.toString(), inline: true }
-              )
-              .setFooter({ text: 'Great job!', iconURL: message.author.displayAvatarURL() });
+            const resultEmbed = createThemeEmbed(
+              'Test Completed!',
+              `You typed the sentence correctly in ${timeTaken.toFixed(2)} seconds!`,
+              themeColors.success
+            )
+            .addFields(
+              { name: 'Words Per Minute', value: wpm.toString(), inline: true },
+              { name: 'Characters', value: sentence.length.toString(), inline: true }
+            )
+            .setFooter({ 
+              text: 'Great job!', 
+              iconURL: message.author.displayAvatarURL() 
+            });
 
             await message.channel.send({ embeds: [resultEmbed] });
             botData.games.delete(gameId);
             collector.stop();
           } else {
-            await message.channel.send('❌ That\'s not quite right. Try again!');
+            await message.channel.send({ embeds: [
+              createThemeEmbed('Try Again', 'That\'s not quite right. Try again!', themeColors.warning)
+            ]});
           }
         });
 
         collector.on('end', (collected, reason) => {
           if (reason === 'time') {
             if (botData.games.has(gameId)) {
-              const timeoutEmbed = new EmbedBuilder()
-                .setColor('#FF0000')
-                .setTitle('⏰ Time\'s Up!')
-                .setDescription('You took too long to complete the typing test.')
-                .setFooter({ text: 'Try again!', iconURL: message.guild.iconURL() });
+              const timeoutEmbed = createThemeEmbed(
+                'Time\'s Up!',
+                'You took too long to complete the typing test.',
+                themeColors.error
+              )
+              .setFooter({ 
+                text: 'Try again!', 
+                iconURL: message.guild.iconURL() 
+              });
 
               message.channel.send({ embeds: [timeoutEmbed] });
               botData.games.delete(gameId);
@@ -1177,11 +2552,101 @@ function setupMiniGames() {
           }
         });
       }
+
+      // Tic Tac Toe game
+      if (command === 'tictactoe' || command === 'ttt') {
+        const opponent = message.mentions.users.first();
+        if (!opponent) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Invalid Opponent', 'Please mention a user to play with!', themeColors.warning)
+          ]});
+        }
+        
+        if (opponent.bot) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Invalid Opponent', 'You can\'t play with bots!', themeColors.warning)
+          ]});
+        }
+        
+        if (opponent.id === message.author.id) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Invalid Opponent', 'You can\'t play with yourself!', themeColors.warning)
+          ]});
+        }
+
+        const gameId = `${message.author.id}-${opponent.id}-ttt`;
+        if (botData.games.has(gameId)) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Game Exists', 'There\'s already an ongoing game between these players!', themeColors.warning)
+          ]});
+        }
+
+        // Initialize game board
+        const board = [
+          [null, null, null],
+          [null, null, null],
+          [null, null, null]
+        ];
+
+        botData.games.set(gameId, {
+          players: [message.author.id, opponent.id],
+          board: board,
+          currentPlayer: 0,
+          lastMove: Date.now()
+        });
+
+        // Create initial game embed
+        const embed = createThemeEmbed(
+          'Tic Tac Toe',
+          `${message.author.toString()} (❌) vs ${opponent.toString()} (⭕)\n\nIt's ${message.author.toString()}'s turn!`,
+          themeColors.games
+        )
+        .setFooter({ 
+          text: 'Game will timeout in 5 minutes of inactivity', 
+          iconURL: message.guild.iconURL() 
+        });
+
+        // Create game board buttons
+        const rows = [];
+        for (let i = 0; i < 3; i++) {
+          const row = new ActionRowBuilder();
+          for (let j = 0; j < 3; j++) {
+            row.addComponents(
+              new ButtonBuilder()
+                .setCustomId(`ttt_${i}_${j}`)
+                .setLabel(' ')
+                .setStyle(ButtonStyle.Secondary)
+                .setEmoji('⬜')
+            );
+          }
+          rows.push(row);
+        }
+
+        const gameMessage = await message.channel.send({ 
+          content: `${message.author.toString()} ${opponent.toString()}`,
+          embeds: [embed], 
+          components: rows 
+        });
+
+        // Set timeout for game
+        const timeout = setTimeout(() => {
+          if (botData.games.has(gameId)) {
+            botData.games.delete(gameId);
+            embed.setColor(themeColors.error)
+              .setDescription('⏰ Game timed out due to inactivity.');
+            gameMessage.edit({ embeds: [embed], components: [] }).catch(console.error);
+          }
+        }, 300000);
+
+        // Store timeout reference
+        botData.games.get(gameId).timeout = timeout;
+      }
     } catch (error) {
       handleError(error, message);
     }
   });
 
+  // RPS button interaction
   client.on('interactionCreate', async interaction => {
     if (!interaction.isButton() || !interaction.customId.startsWith('rps_')) return;
 
@@ -1192,17 +2657,28 @@ function setupMiniGames() {
       );
 
       if (!gameId) {
-        return interaction.reply({ content: '❌ No active game found or game expired.', ephemeral: true });
+        return interaction.reply({ 
+          embeds: [
+            createThemeEmbed('Game Error', 'No active game found or game expired.', themeColors.error)
+          ], 
+          ephemeral: true 
+        });
       }
 
       const game = botData.games.get(gameId);
       if (!game.players.includes(interaction.user.id)) {
-        return interaction.reply({ content: '❌ You\'re not part of this game!', ephemeral: true });
+        return interaction.reply({ 
+          embeds: [
+            createThemeEmbed('Game Error', 'You\'re not part of this game!', themeColors.error)
+          ], 
+          ephemeral: true 
+        });
       }
 
       game.choices[interaction.user.id] = choice;
       await interaction.deferUpdate();
 
+      // If both players have chosen
       if (Object.keys(game.choices).length === 2) {
         const [player1, player2] = game.players;
         const choice1 = game.choices[player1];
@@ -1221,11 +2697,24 @@ function setupMiniGames() {
           result = `<@${player2}> wins!`;
         }
 
-        const embed = new EmbedBuilder()
-          .setColor('#00FF00')
-          .setTitle('🎮 Game Results')
-          .setDescription(`${interaction.client.users.cache.get(player1).toString()} chose ${getEmoji(choice1)}\n${interaction.client.users.cache.get(player2).toString()} chose ${getEmoji(choice2)}\n\n${result}`)
-          .setFooter({ text: 'Thanks for playing!', iconURL: interaction.guild.iconURL() });
+        const getEmoji = c => {
+          switch (c) {
+            case 'rock': return '🪨 Rock';
+            case 'paper': return '📄 Paper';
+            case 'scissors': return '✂️ Scissors';
+            default: return c;
+          }
+        };
+
+        const embed = createThemeEmbed(
+          'Game Results',
+          `${interaction.client.users.cache.get(player1).toString()} chose ${getEmoji(choice1)}\n${interaction.client.users.cache.get(player2).toString()} chose ${getEmoji(choice2)}\n\n${result}`,
+          themeColors.success
+        )
+        .setFooter({ 
+          text: 'Thanks for playing!', 
+          iconURL: interaction.guild.iconURL() 
+        });
 
         await interaction.message.edit({ embeds: [embed], components: [] });
         botData.games.delete(gameId);
@@ -1235,15 +2724,7 @@ function setupMiniGames() {
     }
   });
 
-  function getEmoji(choice) {
-    switch (choice) {
-      case 'rock': return '🪨 Rock';
-      case 'paper': return '📄 Paper';
-      case 'scissors': return '✂️ Scissors';
-      default: return choice;
-    }
-  }
-
+  // Trivia button interaction
   client.on('interactionCreate', async interaction => {
     if (!interaction.isButton() || !interaction.customId.startsWith('trivia_')) return;
 
@@ -1253,26 +2734,39 @@ function setupMiniGames() {
       const game = botData.games.get(gameId);
 
       if (!game) {
-        return interaction.reply({ content: '❌ No active trivia game found or game expired.', ephemeral: true });
+        return interaction.reply({ 
+          embeds: [
+            createThemeEmbed('Game Error', 'No active trivia game found or game expired.', themeColors.error)
+          ], 
+          ephemeral: true 
+        });
       }
 
       clearTimeout(game.timeout);
       await interaction.deferUpdate();
 
       if (answerIndex === game.answer) {
-        const winEmbed = new EmbedBuilder()
-          .setColor('#00FF00')
-          .setTitle('✅ Correct Answer!')
-          .setDescription('You got it right! 🎉')
-          .setFooter({ text: 'Well done!', iconURL: interaction.user.displayAvatarURL() });
+        const winEmbed = createThemeEmbed(
+          'Correct Answer!',
+          'You got it right! 🎉',
+          themeColors.success
+        )
+        .setFooter({ 
+          text: 'Well done!', 
+          iconURL: interaction.user.displayAvatarURL() 
+        });
 
         await interaction.message.edit({ embeds: [winEmbed], components: [] });
       } else {
-        const loseEmbed = new EmbedBuilder()
-          .setColor('#FF0000')
-          .setTitle('❌ Wrong Answer!')
-          .setDescription('Better luck next time!')
-          .setFooter({ text: 'Keep trying!', iconURL: interaction.guild.iconURL() });
+        const loseEmbed = createThemeEmbed(
+          'Wrong Answer!',
+          'Better luck next time!',
+          themeColors.error
+        )
+        .setFooter({ 
+          text: 'Keep trying!', 
+          iconURL: interaction.guild.iconURL() 
+        });
 
         await interaction.message.edit({ embeds: [loseEmbed], components: [] });
       }
@@ -1282,46 +2776,244 @@ function setupMiniGames() {
       handleError(error, interaction);
     }
   });
+
+  // Tic Tac Toe button interaction
+  client.on('interactionCreate', async interaction => {
+    if (!interaction.isButton() || !interaction.customId.startsWith('ttt_')) return;
+
+    try {
+      const [_, row, col] = interaction.customId.split('_');
+      const gameId = [...botData.games.keys()].find(key => 
+        key.includes(interaction.user.id) && key.endsWith('-ttt')
+      );
+
+      if (!gameId) {
+        return interaction.reply({ 
+          embeds: [
+            createThemeEmbed('Game Error', 'No active game found or game expired.', themeColors.error)
+          ], 
+          ephemeral: true 
+        });
+      }
+
+      const game = botData.games.get(gameId);
+      
+      // Check if it's the player's turn
+      const playerIndex = game.players.indexOf(interaction.user.id);
+      if (playerIndex === -1) {
+        return interaction.reply({ 
+          embeds: [
+            createThemeEmbed('Game Error', 'You\'re not part of this game!', themeColors.error)
+          ], 
+          ephemeral: true 
+        });
+      }
+
+      if (playerIndex !== game.currentPlayer) {
+        return interaction.reply({ 
+          embeds: [
+            createThemeEmbed('Not Your Turn', 'Please wait for your turn!', themeColors.warning)
+          ], 
+          ephemeral: true 
+        });
+      }
+
+      // Check if the cell is already taken
+      if (game.board[row][col] !== null) {
+        return interaction.reply({ 
+          embeds: [
+            createThemeEmbed('Invalid Move', 'That cell is already taken!', themeColors.warning)
+          ], 
+          ephemeral: true 
+        });
+      }
+
+      // Make the move
+      game.board[row][col] = playerIndex;
+      game.lastMove = Date.now();
+
+      // Check for winner
+      const winner = checkTicTacToeWinner(game.board);
+      if (winner !== null || isBoardFull(game.board)) {
+        // Game over
+        clearTimeout(game.timeout);
+        botData.games.delete(gameId);
+
+        let result;
+        if (winner !== null) {
+          result = `${interaction.client.users.cache.get(game.players[winner]).toString()} wins!`;
+        } else {
+          result = "It's a tie!";
+        }
+
+        // Update board display
+        const rows = [];
+        for (let i = 0; i < 3; i++) {
+          const actionRow = new ActionRowBuilder();
+          for (let j = 0; j < 3; j++) {
+            const cell = game.board[i][j];
+            let emoji = '⬜';
+            if (cell === 0) emoji = '❌';
+            if (cell === 1) emoji = '⭕';
+
+            actionRow.addComponents(
+              new ButtonBuilder()
+                .setCustomId(`ttt_${i}_${j}`)
+                .setLabel(' ')
+                .setStyle(ButtonStyle.Secondary)
+                .setEmoji(emoji)
+                .setDisabled(true)
+            );
+          }
+          rows.push(actionRow);
+        }
+
+        const embed = createThemeEmbed(
+          'Tic Tac Toe - Game Over',
+          `${interaction.client.users.cache.get(game.players[0]).toString()} (❌) vs ${interaction.client.users.cache.get(game.players[1]).toString()} (⭕)\n\n${result}`,
+          winner !== null ? themeColors.success : themeColors.info
+        );
+
+        await interaction.message.edit({ 
+          embeds: [embed], 
+          components: rows 
+        });
+
+        return;
+      }
+
+      // Switch player
+      game.currentPlayer = game.currentPlayer === 0 ? 1 : 0;
+
+      // Update board display
+      const rows = [];
+      for (let i = 0; i < 3; i++) {
+        const actionRow = new ActionRowBuilder();
+        for (let j = 0; j < 3; j++) {
+          const cell = game.board[i][j];
+          let emoji = '⬜';
+          if (cell === 0) emoji = '❌';
+          if (cell === 1) emoji = '⭕';
+
+          actionRow.addComponents(
+            new ButtonBuilder()
+              .setCustomId(`ttt_${i}_${j}`)
+              .setLabel(' ')
+              .setStyle(ButtonStyle.Secondary)
+              .setEmoji(emoji)
+              .setDisabled(cell !== null)
+          );
+        }
+        rows.push(actionRow);
+      }
+
+      const embed = createThemeEmbed(
+        'Tic Tac Toe',
+        `${interaction.client.users.cache.get(game.players[0]).toString()} (❌) vs ${interaction.client.users.cache.get(game.players[1]).toString()} (⭕)\n\nIt's ${interaction.client.users.cache.get(game.players[game.currentPlayer]).toString()}'s turn!`,
+        themeColors.games
+      );
+
+      await interaction.message.edit({ 
+        embeds: [embed], 
+        components: rows 
+      });
+
+      await interaction.deferUpdate();
+    } catch (error) {
+      handleError(error, interaction);
+    }
+  });
+
+  // Helper function to check Tic Tac Toe winner
+  function checkTicTacToeWinner(board) {
+    // Check rows
+    for (let i = 0; i < 3; i++) {
+      if (board[i][0] !== null && board[i][0] === board[i][1] && board[i][1] === board[i][2]) {
+        return board[i][0];
+      }
+    }
+    
+    // Check columns
+    for (let j = 0; j < 3; j++) {
+      if (board[0][j] !== null && board[0][j] === board[1][j] && board[1][j] === board[2][j]) {
+        return board[0][j];
+      }
+    }
+    
+    // Check diagonals
+    if (board[0][0] !== null && board[0][0] === board[1][1] && board[1][1] === board[2][2]) {
+      return board[0][0];
+    }
+    if (board[0][2] !== null && board[0][2] === board[1][1] && board[1][1] === board[2][0]) {
+      return board[0][2];
+    }
+    
+    return null;
+  }
+
+  // Helper function to check if board is full
+  function isBoardFull(board) {
+    for (let i = 0; i < 3; i++) {
+      for (let j = 0; j < 3; j++) {
+        if (board[i][j] === null) return false;
+      }
+    }
+    return true;
+  }
 }
 
-// DM and Embed tools
+// DM and embed tools
 function setupDmAndEmbedTools() {
   client.on('messageCreate', async message => {
     if (!message.content.startsWith('!') || message.author.bot) return;
-
+    
     const args = message.content.slice(1).trim().split(/ +/);
     const command = args.shift().toLowerCase();
 
     try {
+      // DM a role
       if (command === 'dm') {
         if (!hasPremiumPermissions(message.member)) {
-          return message.reply('❌ You need premium permissions to DM roles!');
+          return message.reply({ embeds: [
+            createThemeEmbed('Access Denied', 'You need premium permissions to DM roles!', themeColors.error)
+          ]});
         }
+        
         const role = message.mentions.roles.first();
-        if (!role) return message.reply('❌ Please mention a role to DM!');
+        if (!role) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Missing Role', 'Please mention a role to DM!', themeColors.warning)
+          ]});
+        }
 
         const dmMessage = args.slice(1).join(' ');
-        if (!dmMessage) return message.reply('❌ Please provide a message to send!');
+        if (!dmMessage) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Missing Message', 'Please provide a message to send!', themeColors.warning)
+          ]});
+        }
 
         const members = role.members.filter(m => !m.user.bot);
-        if (members.size === 0) return message.reply('❌ That role has no members to DM!');
+        if (members.size === 0) {
+          return message.reply({ embeds: [
+            createThemeEmbed('No Members', 'That role has no members to DM!', themeColors.warning)
+          ]});
+        }
 
-        const confirmEmbed = new EmbedBuilder()
-          .setColor('#FFFF00')
-          .setTitle('⚠️ Confirm DM Send')
-          .setDescription(`You are about to DM **${members.size}** members of ${role.toString()}.\n\n**Message:**\n${dmMessage}`)
-          .setFooter({ text: 'This action cannot be undone', iconURL: message.guild.iconURL() });
+        const confirmEmbed = createThemeEmbed(
+          'Confirm DM Send',
+          `You are about to DM **${members.size}** members of ${role.toString()}.\n\n**Message:**\n${dmMessage}`,
+          themeColors.warning
+        )
+        .setFooter({ 
+          text: 'This action cannot be undone', 
+          iconURL: message.guild.iconURL() 
+        });
 
-        const confirmButtons = new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId('confirm_dm')
-            .setLabel('Confirm')
-            .setStyle(ButtonStyle.Success),
-          new ButtonBuilder()
-            .setCustomId('cancel_dm')
-            .setLabel('Cancel')
-            .setStyle(ButtonStyle.Danger)
-        );
+        const confirmButtons = createThemeActionRow([
+          createThemeButton('confirm_dm', 'Confirm', '✅', ButtonStyle.Success),
+          createThemeButton('cancel_dm', 'Cancel', '❌', ButtonStyle.Danger)
+        ]);
 
         const confirmation = await message.reply({ 
           embeds: [confirmEmbed], 
@@ -1339,14 +3031,15 @@ function setupDmAndEmbedTools() {
 
             for (const [, member] of members) {
               try {
-                const dmEmbed = new EmbedBuilder()
-                  .setColor('#5865F2')
-                  .setTitle(`Message from ${message.guild.name}`)
-                  .setDescription(dmMessage)
-                  .setFooter({ 
-                    text: `Sent by ${message.author.tag}`, 
-                    iconURL: message.guild.iconURL() 
-                  });
+                const dmEmbed = createThemeEmbed(
+                  `Message from ${message.guild.name}`,
+                  dmMessage,
+                  themeColors.primary
+                )
+                .setFooter({ 
+                  text: `Sent by ${message.author.tag}`, 
+                  iconURL: message.guild.iconURL() 
+                });
 
                 await member.send({ embeds: [dmEmbed] });
                 successCount++;
@@ -1355,17 +3048,22 @@ function setupDmAndEmbedTools() {
               }
             }
 
-            const resultEmbed = new EmbedBuilder()
-              .setColor('#00FF00')
-              .setTitle('✅ DM Sent')
-              .setDescription(`Successfully sent to ${successCount} members. ${failCount > 0 ? `${failCount} failed.` : ''}`)
-              .setFooter({ text: 'DM operation completed', iconURL: message.guild.iconURL() });
+            const resultEmbed = createThemeEmbed(
+              'DM Sent',
+              `Successfully sent to ${successCount} members. ${failCount > 0 ? `${failCount} failed.` : ''}`,
+              themeColors.success
+            )
+            .setFooter({ 
+              text: 'DM operation completed', 
+              iconURL: message.guild.iconURL() 
+            });
 
             await confirmation.edit({ embeds: [resultEmbed], components: [] });
           } else {
             await i.update({ 
-              content: '❌ DM operation cancelled.', 
-              embeds: [], 
+              embeds: [
+                createThemeEmbed('Operation Cancelled', 'DM sending cancelled.', themeColors.error)
+              ], 
               components: [] 
             });
           }
@@ -1375,20 +3073,30 @@ function setupDmAndEmbedTools() {
         collector.on('end', () => {
           if (!collector.ended) {
             confirmation.edit({ 
-              content: '⏰ DM confirmation timed out.', 
-              embeds: [], 
+              embeds: [
+                createThemeEmbed('Timed Out', 'DM confirmation timed out.', themeColors.error)
+              ], 
               components: [] 
             }).catch(console.error);
           }
         });
       }
 
+      // Create embed
       if (command === 'embed') {
         const color = args.shift();
-        if (!color) return message.reply('❌ Please provide a color (hex or name)!');
+        if (!color) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Missing Color', 'Please provide a color (hex or name)!', themeColors.warning)
+          ]});
+        }
 
         const embedMessage = args.join(' ');
-        if (!embedMessage) return message.reply('❌ Please provide a message for the embed!');
+        if (!embedMessage) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Missing Message', 'Please provide a message for the embed!', themeColors.warning)
+          ]});
+        }
 
         let embedColor;
         if (color.startsWith('#')) {
@@ -1405,12 +3113,10 @@ function setupDmAndEmbedTools() {
             black: '#000000',
             white: '#FFFFFF'
           };
-          embedColor = colorMap[color.toLowerCase()] || '#5865F2';
+          embedColor = colorMap[color.toLowerCase()] || themeColors.primary;
         }
 
-        const embed = new EmbedBuilder()
-          .setColor(embedColor)
-          .setDescription(embedMessage)
+        const embed = createThemeEmbed('', embedMessage, embedColor)
           .setFooter({ 
             text: `Sent by ${message.author.tag}`, 
             iconURL: message.author.displayAvatarURL() 
@@ -1429,147 +3135,222 @@ function setupDmAndEmbedTools() {
 function setupUtilityCommands() {
   client.on('messageCreate', async message => {
     if (!message.content.startsWith('!') || message.author.bot) return;
-
+    
     const args = message.content.slice(1).trim().split(/ +/);
     const command = args.shift().toLowerCase();
 
     try {
+      // Set premium roles
       if (command === 'prems') {
         if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-          return message.reply('❌ You need administrator permissions to set premium roles!');
+          return message.reply({ embeds: [
+            createThemeEmbed('Access Denied', 'You need administrator permissions to set premium roles!', themeColors.error)
+          ]});
         }
+        
         const role = message.mentions.roles.first();
-        if (!role) return message.reply('❌ Please mention a role to give premium permissions!');
+        if (!role) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Missing Role', 'Please mention a role to give premium permissions!', themeColors.warning)
+          ]});
+        }
 
-        botData.premiumRoles.set(message.guild.id, [...(botData.premiumRoles.get(message.guild.id) || []), role.id]);
+        botData.premiumRoles.set(message.guild.id, [
+          ...(botData.premiumRoles.get(message.guild.id) || []), 
+          role.id
+        ]);
 
-        const successEmbed = new EmbedBuilder()
-          .setColor('#00FF00')
-          .setTitle('✅ Premium Role Added!')
-          .setDescription(`Members with ${role.toString()} now have full access to all bot commands and features.`)
-          .setFooter({ text: 'Use this command again to add more roles', iconURL: message.guild.iconURL() });
-
-        await message.reply({ embeds: [successEmbed] });
+        await message.reply({ embeds: [
+          createThemeEmbed(
+            'Premium Role Added',
+            `Members with ${role.toString()} now have full access to all bot commands and features.`,
+            themeColors.success
+          )
+          .setFooter({ 
+            text: 'Use this command again to add more roles', 
+            iconURL: message.guild.iconURL() 
+          })
+        ]});
       }
 
+      // User info command
       if (command === 'userinfo') {
         const user = message.mentions.users.first() || message.author;
         const member = message.guild.members.cache.get(user.id);
 
-        if (!member) return message.reply('❌ That user is not in this server!');
+        if (!member) {
+          return message.reply({ embeds: [
+            createThemeEmbed('User Not Found', 'That user is not in this server!', themeColors.warning)
+          ]});
+        }
 
         const roles = member.roles.cache
           .filter(role => role.id !== message.guild.id)
           .map(role => role.toString())
           .join(' ') || 'None';
 
-        const embed = new EmbedBuilder()
-          .setColor(member.displayHexColor || '#5865F2')
-          .setTitle(`ℹ️ User Info: ${user.tag}`)
-          .setThumbnail(user.displayAvatarURL())
-          .addFields(
-            { name: '🆔 ID', value: user.id, inline: true },
-            { name: '📅 Joined Server', value: member.joinedAt.toLocaleDateString(), inline: true },
-            { name: '📅 Account Created', value: user.createdAt.toLocaleDateString(), inline: true },
-            { name: `🎭 Roles [${member.roles.cache.size - 1}]`, value: roles, inline: false },
-            { name: '🌟 Premium Status', value: hasPremiumPermissions(member) ? '✅ Has premium access' : '❌ No premium access', inline: true }
-          )
-          .setFooter({ text: message.guild.name, iconURL: message.guild.iconURL() });
+        const embed = createThemeEmbed(
+          `User Info: ${user.tag}`,
+          `Information about ${user.toString()}`,
+          member.displayHexColor || themeColors.primary
+        )
+        .setThumbnail(user.displayAvatarURL())
+        .addFields(
+          { name: '🆔 ID', value: user.id, inline: true },
+          { name: '📅 Joined Server', value: member.joinedAt.toLocaleDateString(), inline: true },
+          { name: '📅 Account Created', value: user.createdAt.toLocaleDateString(), inline: true },
+          { name: `🎭 Roles [${member.roles.cache.size - 1}]`, value: roles, inline: false },
+          { name: '🌟 Premium Status', 
+            value: hasPremiumPermissions(member) ? '✅ Has premium access' : '❌ No premium access', 
+            inline: true }
+        )
+        .setFooter({ 
+          text: message.guild.name, 
+          iconURL: message.guild.iconURL() 
+        });
 
         await message.channel.send({ embeds: [embed] });
       }
 
+      // Server info command
       if (command === 'serverinfo') {
         const { guild } = message;
         const owner = await guild.fetchOwner();
 
-        const embed = new EmbedBuilder()
-          .setColor('#5865F2')
-          .setTitle(`ℹ️ Server Info: ${guild.name}`)
-          .setThumbnail(guild.iconURL())
-          .addFields(
-            { name: '🆔 ID', value: guild.id, inline: true },
-            { name: '👑 Owner', value: owner.user.tag, inline: true },
-            { name: '📅 Created', value: guild.createdAt.toLocaleDateString(), inline: true },
-            { name: '👥 Members', value: guild.memberCount.toString(), inline: true },
-            { name: '📊 Channels', value: guild.channels.cache.size.toString(), inline: true },
-            { name: '🎭 Roles', value: guild.roles.cache.size.toString(), inline: true },
-            { name: '✨ Boost Level', value: `Level ${guild.premiumTier}`, inline: true },
-            { name: '🚀 Boosts', value: guild.premiumSubscriptionCount.toString(), inline: true }
-          )
-          .setFooter({ text: `Requested by ${message.author.tag}`, iconURL: message.author.displayAvatarURL() });
+        const embed = createThemeEmbed(
+          `Server Info: ${guild.name}`,
+          `Information about ${guild.name}`,
+          themeColors.primary
+        )
+        .setThumbnail(guild.iconURL())
+        .addFields(
+          { name: '🆔 ID', value: guild.id, inline: true },
+          { name: '👑 Owner', value: owner.user.tag, inline: true },
+          { name: '📅 Created', value: guild.createdAt.toLocaleDateString(), inline: true },
+          { name: '👥 Members', value: guild.memberCount.toString(), inline: true },
+          { name: '📊 Channels', value: guild.channels.cache.size.toString(), inline: true },
+          { name: '🎭 Roles', value: guild.roles.cache.size.toString(), inline: true },
+          { name: '✨ Boost Level', value: `Level ${guild.premiumTier}`, inline: true },
+          { name: '🚀 Boosts', value: guild.premiumSubscriptionCount.toString(), inline: true }
+        )
+        .setFooter({ 
+          text: `Requested by ${message.author.tag}`, 
+          iconURL: message.author.displayAvatarURL() 
+        });
 
         await message.channel.send({ embeds: [embed] });
       }
 
+      // Ping command
       if (command === 'ping') {
-        const sent = await message.channel.send('🏓 Pinging...');
+        const sent = await message.channel.send({ embeds: [
+          createThemeEmbed('Pinging...', 'Calculating bot latency...', themeColors.info)
+        ]});
+        
         const latency = sent.createdTimestamp - message.createdTimestamp;
         const apiLatency = Math.round(client.ws.ping);
 
-        const embed = new EmbedBuilder()
-          .setColor('#00FF00')
-          .setTitle('🏓 Pong!')
-          .addFields(
-            { name: '🤖 Bot Latency', value: `${latency}ms`, inline: true },
-            { name: '🌐 API Latency', value: `${apiLatency}ms`, inline: true }
-          )
-          .setFooter({ text: message.guild.name, iconURL: message.guild.iconURL() });
+        const embed = createThemeEmbed(
+          'Pong!',
+          'Here are the current latency stats:',
+          themeColors.success
+        )
+        .addFields(
+          { name: '🤖 Bot Latency', value: `${latency}ms`, inline: true },
+          { name: '🌐 API Latency', value: `${apiLatency}ms`, inline: true }
+        )
+        .setFooter({ 
+          text: message.guild.name, 
+          iconURL: message.guild.iconURL() 
+        });
 
-        await sent.edit({ content: '', embeds: [embed] });
+        await sent.edit({ embeds: [embed] });
       }
 
+      // Help command
       if (command === 'help') {
-        const embed = new EmbedBuilder()
-          .setColor('#5865F2')
-          .setTitle('🤖 Bot Help Menu')
-          .setDescription('Here are all the available commands:')
-          .addFields(
-            { 
-              name: '🎟️ Ticket System', 
-              value: '`!ticket msg <message>` - Set ticket panel message\n' +
-                    '`!setoptions general:💬, support:🛠️` - Set dropdown options\n' +
-                    '`!setviewer @role` - Set ticket viewer role\n' +
-                    '`!setticketcategory <id>` - Set ticket category\n' +
-                    '`!deployticketpanel` - Deploy ticket panel'
-            },
-            { 
-              name: '📋 Application System', 
-              value: '`!app msg <message>` - Set app panel message\n' +
-                    '`!addoptions Role:🛡️` - Add role buttons\n' +
-                    '`!setappchannel <id>` - Set app channel\n' +
-                    '`!deployapp` - Deploy app panel\n' +
-                    '`!ques1 <question>` - Set question 1'
-            },
-            { 
-              name: '⚠️ Moderation', 
-              value: '`!warn @user [reason]` - Warn a user\n' +
-                    '`!warnings @user` - Check warnings\n' +
-                    '`!warnlimit <number>` - Set warn limit for auto-kick'
-            },
-            { 
-              name: '🎮 Mini-Games', 
-              value: '`!rps @user` - Rock Paper Scissors\n' +
-                    '`!guess` - Number guessing game\n' +
-                    '`!math` - Math challenge\n' +
-                    '`!trivia` - Trivia questions\n' +
-                    '`!type` - Typing speed test'
-            },
-            { 
-              name: '📩 DM & Embeds', 
-              value: '`!dm @role <message>` - DM a role\n' +
-                    '`!embed <color> <message>` - Create an embed'
-            },
-            { 
-              name: 'ℹ️ Utilities', 
-              value: '`!userinfo @user` - User information\n' +
-                    '`!serverinfo` - Server information\n' +
-                    '`!ping` - Bot latency\n' +
-                    '`!prems @role` - Give role full bot access\n' +
-                    '`!help` - This menu'
-            }
-          )
-          .setFooter({ text: 'Prefix: ! | All commands are prefix-based', iconURL: client.user.displayAvatarURL() });
+        const embed = createThemeEmbed(
+          'Bot Help Menu',
+          'Here are all the available commands:',
+          themeColors.primary
+        )
+        .addFields(
+          { 
+            name: '🎟️ Ticket System', 
+            value: '`!ticket msg <message>` - Set ticket panel message\n' +
+                  '`!setoptions general:💬, support:🛠️` - Set dropdown options\n' +
+                  '`!setviewer @role` - Set ticket viewer role\n' +
+                  '`!setticketcategory <id>` - Set ticket category\n' +
+                  '`!deployticketpanel` - Deploy ticket panel'
+          },
+          { 
+            name: '📋 Application System', 
+            value: '`!app msg <message>` - Set app panel message\n' +
+                  '`!addoptions Role:🛡️` - Add role buttons (with or without @)\n' +
+                  '`!setappchannel <id>` - Set app channel\n' +
+                  '`!deployapp` - Deploy app panel\n' +
+                  '`!ques1 <question>` - Set question 1'
+          },
+          { 
+            name: '⚠️ Moderation', 
+            value: '`!warn @user [reason]` - Warn a user\n' +
+                  '`!warnings @user` - Check warnings\n' +
+                  '`!warnlimit <number>` - Set warn limit for auto-kick\n' +
+                  '`!kick @user [reason]` - Kick a user\n' +
+                  '`!ban @user [reason]` - Ban a user\n' +
+                  '`!mute @user [duration]` - Mute a user\n' +
+                  '`!jail @user` - Jail a user\n' +
+                  '`!jailers` - List jailed users\n' +
+                  '`!free @user` - Free a jailed user'
+          },
+          { 
+            name: '💰 Economy', 
+            value: '`!bal` - Check balance\n' +
+                  '`!dep <amount>` - Deposit coins\n' +
+                  '`!with <amount>` - Withdraw coins\n' +
+                  '`!work` - Work for coins\n' +
+                  '`!jobs` - List available jobs\n' +
+                  '`!apply <job>` - Apply for a job\n' +
+                  '`!shop` - View shop\n' +
+                  '`!buy <item>` - Buy an item\n' +
+                  '`!inv` - View inventory\n' +
+                  '`!use <item>` - Use an item\n' +
+                  '`!rob @user` - Rob another user\n' +
+                  '`!cf head/tail <amount>` - Coin flip game (or heads/tails)\n' +
+                  '`!dice <number> <amount>` - Dice game\n' +
+                  '`!slots <amount>` - Slots game\n' +
+                  '`!lottery` - Lottery system\n' +
+                  '`!profile @user` - View profile\n' +
+                  '`!setbio <text>` - Set profile bio\n' +
+                  '`!lb` - Economy leaderboard'
+          },
+          { 
+            name: '🎮 Mini-Games', 
+            value: '`!rps @user` - Rock Paper Scissors\n' +
+                  '`!tictactoe @user` - Tic Tac Toe\n' +
+                  '`!guess` - Number guessing game\n' +
+                  '`!math` - Math challenge\n' +
+                  '`!trivia` - Trivia questions\n' +
+                  '`!type` - Typing speed test'
+          },
+          { 
+            name: '📩 DM & Embeds', 
+            value: '`!dm @role <message>` - DM a role\n' +
+                  '`!embed <color> <message>` - Create an embed'
+          },
+          { 
+            name: 'ℹ️ Utilities', 
+            value: '`!userinfo @user` - User information\n' +
+                  '`!serverinfo` - Server information\n' +
+                  '`!ping` - Bot latency\n' +
+                  '`!prems @role` - Give role full bot access\n' +
+                  '`!help` - This menu'
+          }
+        )
+        .setFooter({ 
+          text: 'Prefix: ! | All commands are prefix-based', 
+          iconURL: client.user.displayAvatarURL() 
+        });
 
         await message.channel.send({ embeds: [embed] });
       }
@@ -1581,13 +3362,22 @@ function setupUtilityCommands() {
 
 // Client ready event
 client.once('ready', () => {
-  console.log(`🔥 ${client.user.tag} is online!`);
-  client.user.setActivity('!help for commands', { type: 'PLAYING' });
+  console.log(`✅ ${client.user.tag} is online!`);
+  
+  // Set status
+  client.user.setPresence({
+    activities: [{
+      name: '!help for commands',
+      type: 'PLAYING'
+    }],
+    status: 'online'
+  });
 
   // Setup all systems
+  setupModerationSystem();
+  setupEconomySystem();
   setupTicketSystem();
   setupApplicationSystem();
-  setupWarningSystem();
   setupMiniGames();
   setupDmAndEmbedTools();
   setupUtilityCommands();
@@ -1600,6 +3390,6 @@ process.on('uncaughtException', console.error);
 
 // Login to Discord
 client.login(process.env.TOKEN).catch(err => {
-  console.error('Failed to login:', err);
+  console.error('❌ Failed to login:', err);
   process.exit(1);
 });
