@@ -3505,7 +3505,6 @@ function setupUtilityCommands() {
               inline: true,
             }
           )
-          .setImage(guild.bannerURL({ size: 1024 }))
           .setFooter({
             text: `Requested by ${message.author.tag}`,
             iconURL: message.author.displayAvatarURL({ dynamic: true }),
@@ -3547,7 +3546,7 @@ function setupUtilityCommands() {
         return sent.edit({ embeds: [embed] });
       }
 
-      // Economy help
+      // Economy help command
       if (command === 'eco' || command === 'economy') {
         const subcommand = args[0]?.toLowerCase();
         if (subcommand && !['help', 'helps'].includes(subcommand)) return;
