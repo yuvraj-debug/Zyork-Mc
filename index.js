@@ -3401,7 +3401,7 @@ function setupUtilityCommands() {
         });
       }
 
-      // Help command - formatted exactly as requested
+      // Help command
       if (command === 'help') {
         const embed = new EmbedBuilder()
           .setColor('#7289DA')
@@ -3682,14 +3682,16 @@ function setupUtilityCommands() {
 
     } catch (error) {
       console.error('Command Error:', error);
-      message.reply({
-        embeds: [
-          new EmbedBuilder()
-            .setColor('#FF0000')
-            .setTitle('❌ Command Error')
-            .setDescription('An error occurred while executing this command')
-        ]
-      });
+      if (!message.deleted) {
+        message.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setColor('#FF0000')
+              .setTitle('❌ Command Error')
+              .setDescription('An error occurred while executing this command')
+          ]
+        }).catch(console.error);
+      }
     }
   });
 }
