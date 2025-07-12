@@ -3392,11 +3392,10 @@ function setupUtilityCommands() {
         ]});
       }
 
-      // User info command (updated with economy stats)
+      // User info command
       if (command === 'userinfo') {
         const user = message.mentions.users.first() || message.author;
         const member = message.guild.members.cache.get(user.id);
-        const eco = getEco(user.id);
 
         if (!member) {
           return message.reply({ embeds: [
@@ -3420,9 +3419,6 @@ function setupUtilityCommands() {
           { name: '📅 Joined Server', value: member.joinedAt.toLocaleDateString(), inline: true },
           { name: '📅 Account Created', value: user.createdAt.toLocaleDateString(), inline: true },
           { name: `🎭 Roles [${member.roles.cache.size - 1}]`, value: roles, inline: false },
-          { name: '💰 Economy', 
-            value: `Wallet: ${eco.wallet} coins\nBank: ${eco.bank} coins\nLevel: ${eco.level}`, 
-            inline: true },
           { name: '🌟 Premium Status', 
             value: hasPremiumPermissions(member) ? '✅ Has premium access' : '❌ No premium access', 
             inline: true }
@@ -3490,7 +3486,58 @@ function setupUtilityCommands() {
         await sent.edit({ embeds: [embed] });
       }
 
-      // Help command (updated with economy commands)
+      // Mods command
+      if (command === 'mods') {
+        const embed = new EmbedBuilder()
+          .setColor(themeColors.moderation)
+          .setTitle('⚠️ Moderation Commands')
+          .setDescription('Here are all the moderation commands:')
+          .addFields(
+            { name: '`!warn @user [reason]`', value: 'Warn a user', inline: true },
+            { name: '`!warnings @user`', value: 'Check warnings', inline: true },
+            { name: '`!warnlimit <number>`', value: 'Set warn limit for auto-kick', inline: true },
+            { name: '`!kick @user [reason]`', value: 'Kick a user', inline: true },
+            { name: '`!ban @user [reason]`', value: 'Ban a user', inline: true },
+            { name: '`!mute @user [duration]`', value: 'Mute a user (default 10 mins)', inline: true },
+            { name: '`!jail @user`', value: 'Jail a user', inline: true },
+            { name: '`!jailers`', value: 'List jailed users', inline: true },
+            { name: '`!free @user`', value: 'Free a jailed user', inline: true }
+          )
+          .setThumbnail('https://emojicdn.elk.sh/⚠️')
+          .setFooter({ 
+            text: `${client.user.username} Moderation`, 
+            iconURL: client.user.displayAvatarURL() 
+          })
+          .setTimestamp();
+
+        await message.channel.send({ embeds: [embed] });
+      }
+
+      // Mini-games command
+      if (command === 'minigames' || command === 'mini games') {
+        const embed = new EmbedBuilder()
+          .setColor(themeColors.games)
+          .setTitle('🎮 Mini-Games Commands')
+          .setDescription('Here are all the mini-game commands:')
+          .addFields(
+            { name: '`!rps @user`', value: 'Rock Paper Scissors', inline: true },
+            { name: '`!tictactoe @user`', value: 'Tic Tac Toe (or !ttt)', inline: true },
+            { name: '`!guess`', value: 'Number guessing game', inline: true },
+            { name: '`!math`', value: 'Math challenge', inline: true },
+            { name: '`!trivia`', value: 'Trivia questions', inline: true },
+            { name: '`!type`', value: 'Typing speed test', inline: true }
+          )
+          .setThumbnail('https://emojicdn.elk.sh/🎮')
+          .setFooter({ 
+            text: `${client.user.username} Games`, 
+            iconURL: client.user.displayAvatarURL() 
+          })
+          .setTimestamp();
+
+        await message.channel.send({ embeds: [embed] });
+      }
+
+      // Help command
       if (command === 'help') {
         const embed = createThemeEmbed(
           'Bot Help Menu',
@@ -3499,35 +3546,26 @@ function setupUtilityCommands() {
         )
         .addFields(
           { 
-            name: '💰 Economy Commands', 
-            value: '`!bal` - Check your balance\n' +
-                  '`!pay @user <amount>` - Send coins to another user\n' +
-                  '`!dep <amount>` - Deposit coins to bank\n' +
-                  '`!with <amount>` - Withdraw coins from bank\n' +
-                  '`!daily` - Claim daily reward\n' +
-                  '`!weekly` - Claim weekly reward\n' +
-                  '`!monthly` - Claim monthly reward\n' +
-                  '`!work` - Work for coins\n' +
-                  '`!jobs` - List available jobs\n' +
-                  '`!apply <job>` - Apply for a job\n' +
-                  '`!shop` - View shop items\n' +
-                  '`!buy <item>` - Buy an item\n' +
-                  '`!inv` - View inventory\n' +
-                  '`!use <item>` - Use an item\n' +
-                  '`!cf head/tail <amount>` - Coin flip game\n' +
-                  '`!dice <number> <amount>` - Dice game\n' +
-                  '`!slots <amount>` - Slots game\n' +
-                  '`!rob @user` - Rob another user\n' +
-                  '`!lottery` - Lottery system\n' +
-                  '`!profile @user` - View profile\n' +
-                  '`!setbio <text>` - Set profile bio\n' +
-                  '`!lb` - Economy leaderboard'
+            name: '🎟️ Ticket System', 
+            value: '`!ticket msg <message>` - Set ticket panel message\n' +
+                  '`!setoptions general:💬, support:🛠️` - Set dropdown options\n' +
+                  '`!setviewer @role` - Set ticket viewer role\n' +
+                  '`!setticketcategory <id>` - Set ticket category\n' +
+                  '`!deployticketpanel` - Deploy ticket panel'
+          },
+          { 
+            name: '📋 Application System', 
+            value: '`!app msg <message>` - Set app panel message\n' +
+                  '`!addoptions Role:🛡️` - Add role buttons (with or without @)\n' +
+                  '`!setappchannel <id>` - Set app channel\n' +
+                  '`!deployapp` - Deploy app panel\n' +
+                  '`!ques1 <question>` - Set question 1'
           },
           { 
             name: '⚠️ Moderation', 
             value: '`!warn @user [reason]` - Warn a user\n' +
                   '`!warnings @user` - Check warnings\n' +
-                  '`!warnlimit <number>` - Set warn limit\n' +
+                  '`!warnlimit <number>` - Set warn limit for auto-kick\n' +
                   '`!kick @user [reason]` - Kick a user\n' +
                   '`!ban @user [reason]` - Ban a user\n' +
                   '`!mute @user [duration]` - Mute a user\n' +
@@ -3536,12 +3574,49 @@ function setupUtilityCommands() {
                   '`!free @user` - Free a jailed user'
           },
           { 
-            name: 'ℹ️ Utility Commands', 
+            name: '💰 Economy', 
+            value: '`!bal` - Check balance\n' +
+                  '`!dep <amount>` - Deposit coins\n' +
+                  '`!with <amount>` - Withdraw coins\n' +
+                  '`!work` - Work for coins\n' +
+                  '`!jobs` - List available jobs\n' +
+                  '`!apply <job>` - Apply for a job\n' +
+                  '`!shop` - View shop\n' +
+                  '`!buy <item>` - Buy an item\n' +
+                  '`!inv` - View inventory\n' +
+                  '`!use <item>` - Use an item\n' +
+                  '`!rob @user` - Rob another user\n' +
+                  '`!cf head/tail <amount>` - Coin flip game (or heads/tails)\n' +
+                  '`!dice <number> <amount>` - Dice game\n' +
+                  '`!slots <amount>` - Slots game\n' +
+                  '`!lottery` - Lottery system\n' +
+                  '`!profile @user` - View profile\n' +
+                  '`!setbio <text>` - Set profile bio\n' +
+                  '`!lb` - Economy leaderboard'
+          },
+          { 
+            name: '🎮 Mini-Games', 
+            value: '`!rps @user` - Rock Paper Scissors\n' +
+                  '`!tictactoe @user` - Tic Tac Toe\n' +
+                  '`!guess` - Number guessing game\n' +
+                  '`!math` - Math challenge\n' +
+                  '`!trivia` - Trivia questions\n' +
+                  '`!type` - Typing speed test'
+          },
+          { 
+            name: '📩 DM & Embeds', 
+            value: '`!dm @role <message>` - DM a role\n' +
+                  '`!embed <color> <message>` - Create an embed'
+          },
+          { 
+            name: 'ℹ️ Utilities', 
             value: '`!userinfo @user` - User information\n' +
                   '`!serverinfo` - Server information\n' +
-                  '`!ping` - Check bot latency\n' +
-                  '`!prems @role` - Set premium role\n' +
-                  '`!help` - Show this menu'
+                  '`!ping` - Bot latency\n' +
+                  '`!prems @role` - Give role full bot access\n' +
+                  '`!help` - This menu\n' +
+                  '`!mods` - Moderation commands\n' +
+                  '`!minigames` - Game commands'
           }
         )
         .setFooter({ 
@@ -3550,101 +3625,6 @@ function setupUtilityCommands() {
         });
 
         await message.channel.send({ embeds: [embed] });
-      }
-
-      // Quick command reference
-      if (command === 'commands') {
-        const embed = createThemeEmbed(
-          'Quick Command Reference',
-          'Here are the main command categories:',
-          themeColors.info
-        )
-        .addFields(
-          { name: '💰 Economy', value: '`!eco help`', inline: true },
-          { name: '⚠️ Moderation', value: '`!mods`', inline: true },
-          { name: 'ℹ️ Utilities', value: '`!utils`', inline: true }
-        )
-        .setFooter({ 
-          text: 'Use these commands to see more details', 
-          iconURL: client.user.displayAvatarURL() 
-        });
-
-        await message.reply({ embeds: [embed] });
-      }
-
-      // Economy help command
-      if (command === 'eco' && args[0] === 'help') {
-        const embed = createThemeEmbed(
-          '💰 Economy Help',
-          'Detailed information about economy commands',
-          themeColors.economy
-        )
-        .addFields(
-          { 
-            name: '💰 Money Commands', 
-            value: '`!bal` - Check balance\n' +
-                  '`!pay @user <amount>` - Send coins to another user\n' +
-                  '`!dep <amount>` - Deposit to bank\n' +
-                  '`!with <amount>` - Withdraw from bank\n' +
-                  '`!daily` - Claim daily reward\n' +
-                  '`!weekly` - Claim weekly reward\n' +
-                  '`!monthly` - Claim monthly reward\n' +
-                  '`!beg` - Beg for coins'
-          },
-          { 
-            name: '💼 Job Commands', 
-            value: '`!work` - Work for coins\n' +
-                  '`!jobs` - List available jobs\n' +
-                  '`!apply <job>` - Apply for a job'
-          },
-          { 
-            name: '🎲 Games', 
-            value: '`!cf head/tail <amount>` - Coin flip\n' +
-                  '`!dice <number> <amount>` - Dice game\n' +
-                  '`!slots <amount>` - Slots game\n' +
-                  '`!rob @user` - Rob another user\n' +
-                  '`!lottery` - Lottery system'
-          },
-          { 
-            name: '🛒 Shop', 
-            value: '`!shop` - View shop\n' +
-                  '`!buy <item>` - Buy an item\n' +
-                  '`!inv` - View inventory\n' +
-                  '`!use <item>` - Use an item'
-          },
-          { 
-            name: '📊 Profile', 
-            value: '`!profile @user` - View profile\n' +
-                  '`!setbio <text>` - Set profile bio\n' +
-                  '`!lb` - Economy leaderboard'
-          }
-        );
-
-        await message.reply({ embeds: [embed] });
-      }
-
-      // Utility help command
-      if (command === 'utils') {
-        const embed = createThemeEmbed(
-          'ℹ️ Utility Commands',
-          'General utility commands',
-          themeColors.info
-        )
-        .addFields(
-          { 
-            name: '📊 Information', 
-            value: '`!userinfo @user` - User information\n' +
-                  '`!serverinfo` - Server information\n' +
-                  '`!ping` - Check bot latency'
-          },
-          { 
-            name: '⚙️ Configuration', 
-            value: '`!prems @role` - Set premium role\n' +
-                  '`!help` - Show full help menu'
-          }
-        );
-
-        await message.reply({ embeds: [embed] });
       }
     } catch (error) {
       handleError(error, message);
