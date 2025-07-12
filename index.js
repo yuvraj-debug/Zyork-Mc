@@ -3486,6 +3486,67 @@ function setupUtilityCommands() {
         await sent.edit({ embeds: [embed] });
       }
 
+      // Economy help command
+      if (command === 'eco' || command === 'economy' || args[0] === 'help' || args[0] === 'helps') {
+        const embed = new EmbedBuilder()
+          .setColor('#FFD700') // Gold color for economy
+          .setTitle('💰 Economy Help Menu')
+          .setDescription('Here are all the economy-related commands:')
+          .addFields(
+            {
+                name: '💰 Basic Commands',
+                value: '`!bal` - Check your balance\n' +
+                       '`!pay @user <amount>` - Send or pay coins\n' +
+                       '`!dep <amount>` - Deposit coins to bank\n' +
+                       '`!with <amount>` - Withdraw coins from bank\n' +
+                       '`!daily` - Claim daily reward (100 coins)\n' +
+                       '`!weekly` - Claim weekly reward (1000 coins)\n' +
+                       '`!monthly` - Claim monthly reward (5000 coins)',
+                inline: true
+            },
+            {
+                name: '💼 Job Commands',
+                value: '`!work` - Work for coins\n' +
+                       '`!jobs` - List available jobs\n' +
+                       '`!apply <job>` - Apply for a job',
+                inline: true
+            },
+            {
+                name: '🛒 Shop Commands',
+                value: '`!shop` - View shop\n' +
+                       '`!buy <item>` - Buy an item\n' +
+                       '`!inv` - View inventory\n' +
+                       '`!use <item>` - Use an item',
+                inline: true
+            },
+            {
+                name: '🎲 Game Commands',
+                value: '`!cf head/tail <amount>` - Coin flip game\n' +
+                       '`!dice <number> <amount>` - Dice game\n' +
+                       '`!slots <amount>` - Slots game\n' +
+                       '`!rob @user` - Rob another user\n' +
+                       '`!lottery` - Lottery system',
+                inline: true
+            },
+            {
+                name: '📊 Profile Commands',
+                value: '`!profile @user` - View profile\n' +
+                       '`!setbio <text>` - Set profile bio\n' +
+                       '`!lb` - Economy leaderboard',
+                inline: true
+            }
+        )
+          .setThumbnail('https://cdn.discordapp.com/emojis/1107625483454902333.webp?size=96&quality=lossless')
+          .setImage('https://i.imgur.com/VZwTk0E.png') // Optional: Add a decorative economy banner
+          .setFooter({
+            text: `${client.user.username} Economy System | All commands are prefix-based`,
+            iconURL: client.user.displayAvatarURL()
+        })
+          .setTimestamp();
+
+        await message.channel.send({ embeds: [embed] });
+      }
+
       // Mods command
       if (command === 'mods') {
         const embed = new EmbedBuilder()
@@ -3512,6 +3573,8 @@ function setupUtilityCommands() {
 
         await message.channel.send({ embeds: [embed] });
       }
+
+      
 
       // Mini-games command
       if (command === 'minigames' || command === 'mini games') {
