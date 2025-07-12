@@ -3349,63 +3349,81 @@ function setupDmAndEmbedTools() {
 
 // Utility commands
 function setupUtilityCommands() {
-  client.on('messageCreate', async message => {
+  client.on('messageCreate', async (message) => {
     if (!message.content.startsWith('!') || message.author.bot) return;
-    
+
     const args = message.content.slice(1).trim().split(/ +/);
     const command = args.shift().toLowerCase();
-
-    // Check if user is the bot owner (you)
     const isOwner = message.author.id === '1202998273376522331';
 
     try {
-      // Set premium roles
+      // Premium role management
       if (command === 'prems') {
         if (!isOwner && !message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-          return message.reply({ embeds: [
-            createThemeEmbed('Access Denied', 'You need administrator permissions to set premium roles!', themeColors.error)
-          ]});
+          return message.reply({
+            embeds: [
+              createThemeEmbed(
+                'Access Denied',
+                'You need administrator permissions to set premium roles!',
+                themeColors.error
+              ),
+            ],
+          });
         }
-        
+
         const role = message.mentions.roles.first();
         if (!role) {
-          return message.reply({ embeds: [
-            createThemeEmbed('Missing Role', 'Please mention a role to give premium permissions!', themeColors.warning)
-          ]});
+          return message.reply({
+            embeds: [
+              createThemeEmbed(
+                'Missing Role',
+                'Please mention a role to give premium permissions!',
+                themeColors.warning
+              ),
+            ],
+          });
         }
 
         botData.premiumRoles.set(message.guild.id, [
-          ...(botData.premiumRoles.get(message.guild.id) || []), 
-          role.id
+          ...(botData.premiumRoles.get(message.guild.id) || []),
+          role.id,
         ]);
 
-        await message.reply({ embeds: [
-          createThemeEmbed(
-            'Premium Role Added',
-            `Members with ${role.toString()} now have full access to all bot commands and features.`,
-            themeColors.success
-          )
-          .setFooter({ 
-            text: 'Use this command again to add more roles', 
-            iconURL: message.guild.iconURL() 
-          })
-        ]});
+        return message.reply({
+          embeds: [
+            createThemeEmbed(
+              'Premium Role Added',
+              `Members with ${role.toString()} now have full access to all bot commands and features.`,
+              themeColors.success
+            )
+              .setFooter({
+                text: 'Use this command again to add more roles',
+                iconURL: message.guild.iconURL(),
+              }),
+          ],
+        });
       }
 
-      // User info command
+      // User information
       if (command === 'userinfo') {
         const user = message.mentions.users.first() || message.author;
         const member = message.guild.members.cache.get(user.id);
 
         if (!member) {
-          return message.reply({ embeds: [
-            createThemeEmbed('User Not Found', 'That user is not in this server!', themeColors.warning)
-          ]});
+          return message.reply({
+            embeds: [
+              createThemeEmbed(
+                'User Not Found',
+                'That user is not in this server!',
+                themeColors.warning
+              ),
+            ],
+          });
         }
 
         const roles = member.roles.cache
-          .filter(role => role.id !== message.guild.id)
-          .map(role => role.toString())
+          .filter((role) => role.id !== message.guild.id)
+          .map((role) => role.toString())
           .join(' ') || 'None';
 
         const embed = createThemeEmbed(
@@ -3413,288 +3431,314 @@ function setupUtilityCommands() {
           `Information about ${user.toString()}`,
           member.displayHexColor || themeColors.primary
         )
-        .setThumbnail(user.displayAvatarURL())
-        .addFields(
-          { name: '🆔 ID', value: user.id, inline: true },
-          { name: '📅 Joined Server', value: member.joinedAt.toLocaleDateString(), inline: true },
-          { name: '📅 Account Created', value: user.createdAt.toLocaleDateString(), inline: true },
-          { name: `🎭 Roles [${member.roles.cache.size - 1}]`, value: roles, inline: false },
-          { name: '🌟 Premium Status', 
-            value: hasPremiumPermissions(member) ? '✅ Has premium access' : '❌ No premium access', 
-            inline: true }
-        )
-        .setFooter({ 
-          text: message.guild.name, 
-          iconURL: message.guild.iconURL() 
-        });
+          .setThumbnail(user.displayAvatarURL({ dynamic: true, size: 1024 }))
+          .addFields(
+            { name: '🆔 ID', value: user.id, inline: true },
+            {
+              name: '📅 Joined Server',
+              value: `<t:${Math.floor(member.joinedAt.getTime() / 1000)}:F>`,
+              inline: true,
+            },
+            {
+              name: '📅 Account Created',
+              value: `<t:${Math.floor(user.createdAt.getTime() / 1000)}:F>`,
+              inline: true,
+            },
+            {
+              name: `🎭 Roles [${member.roles.cache.size - 1}]`,
+              value: roles.length > 1024 ? 'Too many roles to display' : roles,
+              inline: false,
+            },
+            {
+              name: '🌟 Premium Status',
+              value: hasPremiumPermissions(member)
+                ? '✅ Has premium access'
+                : '❌ No premium access',
+              inline: true,
+            }
+          )
+          .setFooter({
+            text: message.guild.name,
+            iconURL: message.guild.iconURL({ dynamic: true }),
+          });
 
-        await message.channel.send({ embeds: [embed] });
+        return message.channel.send({ embeds: [embed] });
       }
 
-      // Server info command
+      // Server information
       if (command === 'serverinfo') {
         const { guild } = message;
         const owner = await guild.fetchOwner();
+        const channels = guild.channels.cache;
+        const textChannels = channels.filter((c) => c.isTextBased()).size;
+        const voiceChannels = channels.filter((c) => c.isVoiceBased()).size;
 
         const embed = createThemeEmbed(
           `Server Info: ${guild.name}`,
           `Information about ${guild.name}`,
           themeColors.primary
         )
-        .setThumbnail(guild.iconURL())
-        .addFields(
-          { name: '🆔 ID', value: guild.id, inline: true },
-          { name: '👑 Owner', value: owner.user.tag, inline: true },
-          { name: '📅 Created', value: guild.createdAt.toLocaleDateString(), inline: true },
-          { name: '👥 Members', value: guild.memberCount.toString(), inline: true },
-          { name: '📊 Channels', value: guild.channels.cache.size.toString(), inline: true },
-          { name: '🎭 Roles', value: guild.roles.cache.size.toString(), inline: true },
-          { name: '✨ Boost Level', value: `Level ${guild.premiumTier}`, inline: true },
-          { name: '🚀 Boosts', value: guild.premiumSubscriptionCount.toString(), inline: true }
-        )
-        .setFooter({ 
-          text: `Requested by ${message.author.tag}`, 
-          iconURL: message.author.displayAvatarURL() 
-        });
+          .setThumbnail(guild.iconURL({ dynamic: true, size: 1024 }))
+          .addFields(
+            { name: '🆔 ID', value: guild.id, inline: true },
+            { name: '👑 Owner', value: owner.user.tag, inline: true },
+            {
+              name: '📅 Created',
+              value: `<t:${Math.floor(guild.createdAt.getTime() / 1000)}:F>`,
+              inline: true,
+            },
+            { name: '👥 Members', value: guild.memberCount.toString(), inline: true },
+            {
+              name: '📊 Channels',
+              value: `💬 ${textChannels} | 🔊 ${voiceChannels}`,
+              inline: true,
+            },
+            { name: '🎭 Roles', value: guild.roles.cache.size.toString(), inline: true },
+            {
+              name: '✨ Boost Level',
+              value: `Level ${guild.premiumTier} (${guild.premiumSubscriptionCount} boosts)`,
+              inline: true,
+            },
+            {
+              name: '🔐 Verification',
+              value: guild.verificationLevel || 'None',
+              inline: true,
+            }
+          )
+          .setImage(guild.bannerURL({ size: 1024 }))
+          .setFooter({
+            text: `Requested by ${message.author.tag}`,
+            iconURL: message.author.displayAvatarURL({ dynamic: true }),
+          });
 
-        await message.channel.send({ embeds: [embed] });
+        return message.channel.send({ embeds: [embed] });
       }
 
-      // Ping command
+      // Bot latency check
       if (command === 'ping') {
-        const sent = await message.channel.send({ embeds: [
-          createThemeEmbed('Pinging...', 'Calculating bot latency...', themeColors.info)
-        ]});
-        
+        const sent = await message.channel.send({
+          embeds: [
+            createThemeEmbed(
+              'Pinging...',
+              'Calculating bot latency...',
+              themeColors.info
+            ),
+          ],
+        });
+
         const latency = sent.createdTimestamp - message.createdTimestamp;
         const apiLatency = Math.round(client.ws.ping);
 
         const embed = createThemeEmbed(
-          'Pong!',
+          'Pong! 🏓',
           'Here are the current latency stats:',
           themeColors.success
         )
-        .addFields(
-          { name: '🤖 Bot Latency', value: `${latency}ms`, inline: true },
-          { name: '🌐 API Latency', value: `${apiLatency}ms`, inline: true }
-        )
-        .setFooter({ 
-          text: message.guild.name, 
-          iconURL: message.guild.iconURL() 
-        });
+          .addFields(
+            { name: '🤖 Bot Latency', value: `${latency}ms`, inline: true },
+            { name: '🌐 API Latency', value: `${apiLatency}ms`, inline: true },
+            { name: '💓 Heartbeat', value: `${client.ws.ping}ms`, inline: true }
+          )
+          .setFooter({
+            text: message.guild.name,
+            iconURL: message.guild.iconURL({ dynamic: true }),
+          });
 
-        await sent.edit({ embeds: [embed] });
+        return sent.edit({ embeds: [embed] });
       }
 
-      // Economy help command
-      if (command === 'eco' || command === 'economy' || args[0] === 'help' || args[0] === 'helps') {
+      // Economy help
+      if (command === 'eco' || command === 'economy') {
+        const subcommand = args[0]?.toLowerCase();
+        if (subcommand && !['help', 'helps'].includes(subcommand)) return;
+
         const embed = new EmbedBuilder()
-          .setColor('#FFD700') // Gold color for economy
+          .setColor('#FFD700')
           .setTitle('💰 Economy Help Menu')
           .setDescription('Here are all the economy-related commands:')
           .addFields(
             {
-                name: '💰 Basic Commands',
-                value: '`!bal` - Check your balance\n' +
-                       '`!pay @user <amount>` - Send or pay coins\n' +
-                       '`!dep <amount>` - Deposit coins to bank\n' +
-                       '`!with <amount>` - Withdraw coins from bank\n' +
-                       '`!daily` - Claim daily reward (100 coins)\n' +
-                       '`!weekly` - Claim weekly reward (1000 coins)\n' +
-                       '`!monthly` - Claim monthly reward (5000 coins)',
-                inline: true
+              name: '💰 Basic Commands',
+              value: [
+                '`!bal` - Check your balance',
+                '`!pay @user <amount>` - Send coins to another user',
+                '`!dep <amount>` - Deposit coins to bank',
+                '`!with <amount>` - Withdraw coins from bank',
+                '`!daily` - Claim daily reward (100 coins)',
+                '`!weekly` - Claim weekly reward (1000 coins)',
+                '`!monthly` - Claim monthly reward (5000 coins)',
+              ].join('\n'),
+              inline: true,
             },
             {
-                name: '💼 Job Commands',
-                value: '`!work` - Work for coins\n' +
-                       '`!jobs` - List available jobs\n' +
-                       '`!apply <job>` - Apply for a job',
-                inline: true
+              name: '💼 Job Commands',
+              value: [
+                '`!work` - Work for coins',
+                '`!jobs` - List available jobs',
+                '`!apply <job>` - Apply for a job',
+              ].join('\n'),
+              inline: true,
             },
             {
-                name: '🛒 Shop Commands',
-                value: '`!shop` - View shop\n' +
-                       '`!buy <item>` - Buy an item\n' +
-                       '`!inv` - View inventory\n' +
-                       '`!use <item>` - Use an item',
-                inline: true
+              name: '🛒 Shop Commands',
+              value: [
+                '`!shop` - View shop',
+                '`!buy <item>` - Buy an item',
+                '`!inv` - View inventory',
+                '`!use <item>` - Use an item',
+              ].join('\n'),
+              inline: true,
             },
             {
-                name: '🎲 Game Commands',
-                value: '`!cf head/tail <amount>` - Coin flip game\n' +
-                       '`!dice <number> <amount>` - Dice game\n' +
-                       '`!slots <amount>` - Slots game\n' +
-                       '`!rob @user` - Rob another user\n' +
-                       '`!lottery` - Lottery system',
-                inline: true
+              name: '🎲 Game Commands',
+              value: [
+                '`!cf head/tail <amount>` - Coin flip game',
+                '`!dice <number> <amount>` - Dice game',
+                '`!slots <amount>` - Slots game',
+                '`!rob @user` - Rob another user',
+                '`!lottery` - Lottery system',
+              ].join('\n'),
+              inline: true,
             },
             {
-                name: '📊 Profile Commands',
-                value: '`!profile @user` - View profile\n' +
-                       '`!setbio <text>` - Set profile bio\n' +
-                       '`!lb` - Economy leaderboard',
-                inline: true
+              name: '📊 Profile Commands',
+              value: [
+                '`!profile @user` - View profile',
+                '`!setbio <text>` - Set profile bio',
+                '`!lb` - Economy leaderboard',
+              ].join('\n'),
+              inline: true,
             }
-        )
-          .setThumbnail('https://cdn.discordapp.com/emojis/1107625483454902333.webp?size=96&quality=lossless')
-          .setImage('https://i.imgur.com/VZwTk0E.png') // Optional: Add a decorative economy banner
-          .setFooter({
-            text: `${client.user.username} Economy System | All commands are prefix-based`,
-            iconURL: client.user.displayAvatarURL()
-        })
-          .setTimestamp();
-
-        await message.channel.send({ embeds: [embed] });
-      }
-
-      // Mods command
-      if (command === 'mods') {
-        const embed = new EmbedBuilder()
-          .setColor(themeColors.moderation)
-          .setTitle('⚠️ Moderation Commands')
-          .setDescription('Here are all the moderation commands:')
-          .addFields(
-            { name: '`!warn @user [reason]`', value: 'Warn a user', inline: true },
-            { name: '`!warnings @user`', value: 'Check warnings', inline: true },
-            { name: '`!warnlimit <number>`', value: 'Set warn limit for auto-kick', inline: true },
-            { name: '`!kick @user [reason]`', value: 'Kick a user', inline: true },
-            { name: '`!ban @user [reason]`', value: 'Ban a user', inline: true },
-            { name: '`!mute @user [duration]`', value: 'Mute a user (default 10 mins)', inline: true },
-            { name: '`!jail @user`', value: 'Jail a user', inline: true },
-            { name: '`!jailers`', value: 'List jailed users', inline: true },
-            { name: '`!free @user`', value: 'Free a jailed user', inline: true }
           )
-          .setThumbnail('https://emojicdn.elk.sh/⚠️')
-          .setFooter({ 
-            text: `${client.user.username} Moderation`, 
-            iconURL: client.user.displayAvatarURL() 
+          .setThumbnail('https://cdn.discordapp.com/emojis/1107625483454902333.webp')
+          .setFooter({
+            text: `${client.user.username} Economy System | Prefix: !`,
+            iconURL: client.user.displayAvatarURL(),
           })
           .setTimestamp();
 
-        await message.channel.send({ embeds: [embed] });
+        return message.channel.send({ embeds: [embed] });
       }
 
-      
+      // Moderation help
+      if (command === 'mods') {
+        const embed = new EmbedBuilder()
+          .setColor(themeColors.moderation)
+          .setTitle('🛡️ Moderation Commands')
+          .setDescription('Here are all the moderation commands:')
+          .addFields(
+            {
+              name: 'Warnings',
+              value: [
+                '`!warn @user [reason]`',
+                '`!warnings @user`',
+                '`!warnlimit <number>`',
+              ].join('\n'),
+              inline: true,
+            },
+            {
+              name: 'Punishments',
+              value: [
+                '`!kick @user [reason]`',
+                '`!ban @user [reason]`',
+                '`!mute @user [time]`',
+              ].join('\n'),
+              inline: true,
+            },
+            {
+              name: 'Jail System',
+              value: ['`!jail @user`', '`!jailers`', '`!free @user`'].join('\n'),
+              inline: true,
+            }
+          )
+          .setThumbnail('https://emojicdn.elk.sh/🛡️')
+          .setFooter({
+            text: `${client.user.username} Moderation`,
+            iconURL: client.user.displayAvatarURL(),
+          })
+          .setTimestamp();
 
-      // Mini-games command
+        return message.channel.send({ embeds: [embed] });
+      }
+
+      // Mini-games help
       if (command === 'minigames' || command === 'mini games') {
         const embed = new EmbedBuilder()
           .setColor(themeColors.games)
           .setTitle('🎮 Mini-Games Commands')
           .setDescription('Here are all the mini-game commands:')
           .addFields(
-            { name: '`!rps @user`', value: 'Rock Paper Scissors', inline: true },
-            { name: '`!tictactoe @user`', value: 'Tic Tac Toe (or !ttt)', inline: true },
-            { name: '`!guess`', value: 'Number guessing game', inline: true },
-            { name: '`!math`', value: 'Math challenge', inline: true },
-            { name: '`!trivia`', value: 'Trivia questions', inline: true },
-            { name: '`!type`', value: 'Typing speed test', inline: true }
+            {
+              name: 'Games',
+              value: [
+                '`!rps @user` - Rock Paper Scissors',
+                '`!tictactoe @user` - Tic Tac Toe (or !ttt)',
+                '`!guess` - Number guessing game',
+                '`!math` - Math challenge',
+                '`!trivia` - Trivia questions',
+                '`!type` - Typing speed test',
+              ].join('\n'),
+            }
           )
           .setThumbnail('https://emojicdn.elk.sh/🎮')
-          .setFooter({ 
-            text: `${client.user.username} Games`, 
-            iconURL: client.user.displayAvatarURL() 
+          .setFooter({
+            text: `${client.user.username} Games`,
+            iconURL: client.user.displayAvatarURL(),
           })
           .setTimestamp();
 
-        await message.channel.send({ embeds: [embed] });
+        return message.channel.send({ embeds: [embed] });
       }
 
-      // Help command
+      // Main help command
       if (command === 'help') {
-        const embed = createThemeEmbed(
-          'Bot Help Menu',
-          'Here are all the available commands:',
-          themeColors.primary
-        )
-        .addFields(
-          { 
-            name: '🎟️ Ticket System', 
-            value: '`!ticket msg <message>` - Set ticket panel message\n' +
-                  '`!setoptions general:💬, support:🛠️` - Set dropdown options\n' +
-                  '`!setviewer @role` - Set ticket viewer role\n' +
-                  '`!setticketcategory <id>` - Set ticket category\n' +
-                  '`!deployticketpanel` - Deploy ticket panel'
-          },
-          { 
-            name: '📋 Application System', 
-            value: '`!app msg <message>` - Set app panel message\n' +
-                  '`!addoptions Role:🛡️` - Add role buttons (with or without @)\n' +
-                  '`!setappchannel <id>` - Set app channel\n' +
-                  '`!deployapp` - Deploy app panel\n' +
-                  '`!ques1 <question>` - Set question 1'
-          },
-          { 
-            name: '⚠️ Moderation', 
-            value: '`!warn @user [reason]` - Warn a user\n' +
-                  '`!warnings @user` - Check warnings\n' +
-                  '`!warnlimit <number>` - Set warn limit for auto-kick\n' +
-                  '`!kick @user [reason]` - Kick a user\n' +
-                  '`!ban @user [reason]` - Ban a user\n' +
-                  '`!mute @user [duration]` - Mute a user\n' +
-                  '`!jail @user` - Jail a user\n' +
-                  '`!jailers` - List jailed users\n' +
-                  '`!free @user` - Free a jailed user'
-          },
-          { 
-            name: '💰 Economy', 
-            value: '`!bal` - Check balance\n' +
-                  '`!dep <amount>` - Deposit coins\n' +
-                  '`!with <amount>` - Withdraw coins\n' +
-                  '`!work` - Work for coins\n' +
-                  '`!jobs` - List available jobs\n' +
-                  '`!apply <job>` - Apply for a job\n' +
-                  '`!shop` - View shop\n' +
-                  '`!buy <item>` - Buy an item\n' +
-                  '`!inv` - View inventory\n' +
-                  '`!use <item>` - Use an item\n' +
-                  '`!rob @user` - Rob another user\n' +
-                  '`!cf head/tail <amount>` - Coin flip game (or heads/tails)\n' +
-                  '`!dice <number> <amount>` - Dice game\n' +
-                  '`!slots <amount>` - Slots game\n' +
-                  '`!lottery` - Lottery system\n' +
-                  '`!profile @user` - View profile\n' +
-                  '`!setbio <text>` - Set profile bio\n' +
-                  '`!lb` - Economy leaderboard'
-          },
-          { 
-            name: '🎮 Mini-Games', 
-            value: '`!rps @user` - Rock Paper Scissors\n' +
-                  '`!tictactoe @user` - Tic Tac Toe\n' +
-                  '`!guess` - Number guessing game\n' +
-                  '`!math` - Math challenge\n' +
-                  '`!trivia` - Trivia questions\n' +
-                  '`!type` - Typing speed test'
-          },
-          { 
-            name: '📩 DM & Embeds', 
-            value: '`!dm @role <message>` - DM a role\n' +
-                  '`!embed <color> <message>` - Create an embed'
-          },
-          { 
-            name: 'ℹ️ Utilities', 
-            value: '`!userinfo @user` - User information\n' +
-                  '`!serverinfo` - Server information\n' +
-                  '`!ping` - Bot latency\n' +
-                  '`!prems @role` - Give role full bot access\n' +
-                  '`!help` - This menu\n' +
-                  '`!mods` - Moderation commands\n' +
-                  '`!minigames` - Game commands'
-          }
-        )
-        .setFooter({ 
-          text: 'Prefix: ! | All commands are prefix-based', 
-          iconURL: client.user.displayAvatarURL() 
-        });
+        const embed = new EmbedBuilder()
+          .setColor(themeColors.primary)
+          .setTitle('📚 Bot Help Menu')
+          .setDescription(`Use \`!<command>\` to interact with ${client.user.username}`)
+          .addFields(
+            {
+              name: '📋 Categories',
+              value: [
+                '`!help mods` - Moderation commands',
+                '`!help eco` - Economy commands',
+                '`!help games` - Game commands',
+                '`!help tickets` - Ticket system',
+                '`!help apps` - Application system',
+              ].join('\n'),
+            },
+            {
+              name: 'ℹ️ Utility Commands',
+              value: [
+                '`!userinfo @user` - Get user information',
+                '`!serverinfo` - Get server information',
+                '`!ping` - Check bot latency',
+                '`!prems @role` - Set premium role (Admin only)',
+              ].join('\n'),
+            }
+          )
+          .setFooter({
+            text: `${client.user.username} | Use !<command> help for more info`,
+            iconURL: client.user.displayAvatarURL(),
+          })
+          .setTimestamp();
 
-        await message.channel.send({ embeds: [embed] });
+        return message.channel.send({ embeds: [embed] });
       }
     } catch (error) {
-      handleError(error, message);
+      console.error('Command Error:', error);
+      message.reply({
+        embeds: [
+          createThemeEmbed(
+            'Command Error',
+            'An error occurred while executing this command',
+            themeColors.error
+          ),
+        ],
+      });
     }
   });
 }
-
 
 // Client ready event
 client.once('ready', () => {
