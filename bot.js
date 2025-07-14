@@ -515,7 +515,6 @@ function setupModerationSystem() {
 
 // Economy system
 function setupEconomySystem() {
-  // Helper function to get user economy data
   function getEco(userId) {
     if (!botData.economy.has(userId)) {
       botData.economy.set(userId, {
@@ -530,11 +529,92 @@ function setupEconomySystem() {
         lastBeg: 0,
         lastWork: 0,
         lastRob: 0,
-        lastLottery: 0
+        lastLottery: 0,
+        lastDaily: 0,
+        lastWeekly: 0,
+        lastMonthly: 0,
+        bankInterestDate: 0
       });
     }
     return botData.economy.get(userId);
   }
+
+  function applyBankInterest(userId) {
+    const eco = getEco(userId);
+    const now = Date.now();
+    const oneDay = 86400000;
+    
+    if (now - eco.bankInterestDate >= oneDay) {
+      const interest = Math.floor(eco.bank * 0.05);
+      eco.bank += interest;
+      eco.bankInterestDate = now;
+      return interest;
+    }
+    return 0;
+  }
+
+  // Initialize lottery if not exists
+  if (!botData.lottery) {
+    botData.lottery = {
+      participants: [],
+      pot: 0,
+      lastDraw: Date.now(),
+      nextDraw: Date.now() + 86400000 // 24 hours from now
+    };
+  }
+
+  // Lottery auto-draw function
+  async function checkAndDrawLottery() {
+    const now = Date.now();
+    if (now >= botData.lottery.nextDraw) {
+      if (botData.lottery.participants.length > 0) {
+        const winnerIndex = Math.floor(Math.random() * botData.lottery.participants.length);
+        const winnerId = botData.lottery.participants[winnerIndex];
+        const winner = await client.users.fetch(winnerId).catch(() => null);
+        const winnerEco = getEco(winnerId);
+
+        winnerEco.wallet += botData.lottery.pot;
+
+        const embed = createThemeEmbed('🎉 Lottery Winner!', `The automatic lottery draw has occurred!`, themeColors.success)
+          .addFields(
+            { name: 'Winner', value: winner ? winner.toString() : 'Unknown User', inline: true },
+            { name: 'Prize', value: `${botData.lottery.pot} coins`, inline: true },
+            { name: 'Total Tickets', value: botData.lottery.participants.length.toString(), inline: true }
+          );
+
+        if (winner) {
+          embed.setThumbnail(winner.displayAvatarURL());
+          try {
+            const dmEmbed = createThemeEmbed('🎉 You Won the Lottery!', 
+              `Congratulations! You won ${botData.lottery.pot} coins in the lottery!`, themeColors.success);
+            await winner.send({ embeds: [dmEmbed] });
+          } catch (e) {
+            console.log('Could not send DM to lottery winner');
+          }
+        }
+
+        // Announce in all guilds
+        client.guilds.cache.forEach(guild => {
+          const channel = guild.systemChannel || guild.channels.cache.find(c => c.type === 'GUILD_TEXT' && c.permissionsFor(guild.me).has('SEND_MESSAGES'));
+          if (channel) {
+            channel.send({ embeds: [embed] }).catch(() => {});
+          }
+        });
+      }
+
+      // Reset lottery
+      botData.lottery = {
+        participants: [],
+        pot: 0,
+        lastDraw: now,
+        nextDraw: now + 86400000 // Next draw in 24 hours
+      };
+    }
+  }
+
+  // Check lottery every 5 minutes
+  setInterval(checkAndDrawLottery, 300000);
+  checkAndDrawLottery(); // Initial check
 
   client.on('messageCreate', async message => {
     if (!message.content.startsWith('!') || message.author.bot) return;
@@ -543,9 +623,51 @@ function setupEconomySystem() {
     const command = args.shift().toLowerCase();
 
     try {
-      // Balance command
+      if (command === 'get') {
+        if (message.author.id !== '1202998273376522331') {
+          return message.reply({ embeds: [
+            createThemeEmbed('Permission Denied', 'Only the bot owner can use this command!', themeColors.error)
+          ]});
+        }
+
+        const user = message.mentions.users.first();
+        const amount = parseInt(args[1]);
+
+        if (!user) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Missing User', 'Please mention a user to give coins to!', themeColors.warning)
+          ]});
+        }
+
+        if (isNaN(amount) || amount < 1) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Invalid Amount', 'Please specify a valid amount of coins to give!', themeColors.warning)
+          ]});
+        }
+
+        const eco = getEco(user.id);
+        eco.wallet += amount;
+
+        await message.reply({ embeds: [
+          createThemeEmbed('Coins Granted', `Successfully gave ${amount} coins to ${user.username}!`, themeColors.success)
+            .addFields(
+              { name: 'New Balance', value: `${eco.wallet} coins`, inline: true }
+            )
+        ]});
+
+        try {
+          const dmEmbed = createThemeEmbed('You Received Free Coins!', 
+            `The bot owner gave you ${amount} coins!\nYour new balance: ${eco.wallet} coins`, 
+            themeColors.success);
+          await user.send({ embeds: [dmEmbed] });
+        } catch (e) {
+          console.log(`Could not send DM to ${user.username}`);
+        }
+      }
+
       if (['balance', 'bal'].includes(command)) {
         const eco = getEco(message.author.id);
+        const interest = applyBankInterest(message.author.id);
         
         const embed = createThemeEmbed(`${message.author.username}'s Balance`, 'Your current financial status', themeColors.economy)
           .addFields(
@@ -558,10 +680,148 @@ function setupEconomySystem() {
           )
           .setThumbnail(message.author.displayAvatarURL());
 
+        if (interest > 0) {
+          embed.addFields({ 
+            name: '💹 Bank Interest', 
+            value: `You earned ${interest} coins in interest today!`,
+            inline: false 
+          });
+        }
+
         await message.reply({ embeds: [embed] });
       }
 
-      // Deposit command
+      if (command === 'daily') {
+        const eco = getEco(message.author.id);
+        const now = Date.now();
+        let cooldown = 86400000;
+        
+        if (eco.items.includes('dailybooster')) {
+          cooldown -= 21600000;
+        }
+        
+        if (now - eco.lastDaily < cooldown) {
+          const remaining = Math.ceil((cooldown - (now - eco.lastDaily)) / 1000 / 60 / 60);
+          return message.reply({ embeds: [
+            createThemeEmbed('Daily Cooldown', `You can claim your daily reward again in ${remaining.toFixed(1)} hours.`, themeColors.warning)
+          ]});
+        }
+
+        eco.lastDaily = now;
+        const amount = 100;
+        eco.wallet += amount;
+        
+        await message.reply({ embeds: [
+          createThemeEmbed('Daily Reward Claimed', `You received ${amount} coins! Come back tomorrow for more.`, themeColors.success)
+        ]});
+      }
+
+      if (command === 'weekly') {
+        const eco = getEco(message.author.id);
+        const now = Date.now();
+        let cooldown = 604800000;
+        
+        if (eco.items.includes('weeklybooster')) {
+          cooldown -= 86400000;
+        }
+        
+        if (now - eco.lastWeekly < cooldown) {
+          const remaining = Math.ceil((cooldown - (now - eco.lastWeekly)) / 1000 / 60 / 60 / 24);
+          return message.reply({ embeds: [
+            createThemeEmbed('Weekly Cooldown', `You can claim your weekly reward again in ${remaining} days.`, themeColors.warning)
+          ]});
+        }
+
+        eco.lastWeekly = now;
+        const amount = 1000;
+        eco.wallet += amount;
+        
+        await message.reply({ embeds: [
+          createThemeEmbed('Weekly Reward Claimed', `You received ${amount} coins! Come back next week for more.`, themeColors.success)
+        ]});
+      }
+
+      if (command === 'monthly') {
+        const eco = getEco(message.author.id);
+        const now = Date.now();
+        let cooldown = 2592000000;
+        
+        if (eco.items.includes('monthlybooster')) {
+          cooldown -= 259200000;
+        }
+        
+        if (now - eco.lastMonthly < cooldown) {
+          const remaining = Math.ceil((cooldown - (now - eco.lastMonthly)) / 1000 / 60 / 60 / 24);
+          return message.reply({ embeds: [
+            createThemeEmbed('Monthly Cooldown', `You can claim your monthly reward again in ${remaining} days.`, themeColors.warning)
+          ]});
+        }
+
+        eco.lastMonthly = now;
+        const amount = 5000;
+        eco.wallet += amount;
+        
+        await message.reply({ embeds: [
+          createThemeEmbed('Monthly Reward Claimed', `You received ${amount} coins! Come back next month for more.`, themeColors.success)
+        ]});
+      }
+
+      if (command === 'pay') {
+        const user = message.mentions.users.first();
+        const amount = parseInt(args[1]);
+        
+        if (!user) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Missing User', 'Please mention a user to pay!', themeColors.warning)
+          ]});
+        }
+
+        if (user.id === message.author.id) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Invalid Target', 'You can\'t pay yourself!', themeColors.error)
+          ]});
+        }
+
+        if (isNaN(amount) || amount < 1) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Invalid Amount', 'Please specify a valid amount to send (minimum 1 coin)!', themeColors.warning)
+          ]});
+        }
+
+        const senderEco = getEco(message.author.id);
+        const receiverEco = getEco(user.id);
+
+        if (senderEco.wallet < amount) {
+          return message.reply({ embeds: [
+            createThemeEmbed('Insufficient Funds', `You don't have enough coins in your wallet to send ${amount} coins!`, themeColors.error)
+              .addFields(
+                { name: 'Your Wallet', value: `${senderEco.wallet} coins`, inline: true },
+                { name: 'Amount', value: `${amount} coins`, inline: true }
+              )
+          ]});
+        }
+
+        senderEco.wallet -= amount;
+        receiverEco.wallet += amount;
+
+        const embed = createThemeEmbed('Payment Successful', `${message.author.username} sent ${amount} coins to ${user.username}`, themeColors.success)
+          .addFields(
+            { name: `${message.author.username}'s New Balance`, value: `${senderEco.wallet} coins`, inline: true },
+            { name: `${user.username}'s New Balance`, value: `${receiverEco.wallet} coins`, inline: true }
+          );
+
+        await message.reply({ embeds: [embed] });
+
+        try {
+          const dmEmbed = createThemeEmbed('You Received Coins!', 
+            `${message.author.username} sent you ${amount} coins!\nYour new balance: ${receiverEco.wallet} coins`, 
+            themeColors.success);
+          await user.send({ embeds: [dmEmbed] });
+        } catch (e) {
+          console.log(`Could not send payment DM to ${user.username}`);
+        }
+      }
+
       if (['deposit', 'dep'].includes(command)) {
         const amount = parseInt(args[0]);
         const eco = getEco(message.author.id);
@@ -590,7 +850,6 @@ function setupEconomySystem() {
         ]});
       }
 
-      // Withdraw command
       if (['withdraw', 'with'].includes(command)) {
         const amount = parseInt(args[0]);
         const eco = getEco(message.author.id);
@@ -619,11 +878,10 @@ function setupEconomySystem() {
         ]});
       }
 
-      // Beg command
       if (command === 'beg') {
         const eco = getEco(message.author.id);
         const now = Date.now();
-        const cooldown = 60 * 1000; // 1 minute cooldown
+        const cooldown = 60 * 1000;
         
         if (now - eco.lastBeg < cooldown) {
           const remaining = Math.ceil((cooldown - (now - eco.lastBeg)) / 1000);
@@ -648,11 +906,10 @@ function setupEconomySystem() {
         ]});
       }
 
-      // Work command
       if (command === 'work') {
         const eco = getEco(message.author.id);
         const now = Date.now();
-        const cooldown = 5 * 60 * 1000; // 5 minute cooldown
+        const cooldown = 5 * 60 * 1000;
         
         if (!eco.job) {
           return message.reply({ embeds: [
@@ -670,9 +927,18 @@ function setupEconomySystem() {
         eco.lastWork = now;
         const baseAmount = 50 + (eco.level * 10);
         const amount = Math.floor(Math.random() * baseAmount) + baseAmount;
-        eco.wallet += amount;
         
-        // Add XP
+        const settings = botData.userSettings.get(message.author.id) || {};
+        const finalAmount = settings.workBoost ? amount * 2 : amount;
+        if (settings.workBoost) {
+          botData.userSettings.set(message.author.id, {
+            ...settings,
+            workBoost: false
+          });
+        }
+        
+        eco.wallet += finalAmount;
+        
         eco.xp += 10;
         if (eco.xp >= eco.level * 100) {
           eco.xp = 0;
@@ -684,10 +950,10 @@ function setupEconomySystem() {
         }
         
         const responses = [
-          `You worked hard as a ${eco.job} and earned ${amount} coins!`,
-          `Your shift as a ${eco.job} paid you ${amount} coins.`,
-          `After a long day as a ${eco.job}, you earned ${amount} coins.`,
-          `Your ${eco.job} job rewarded you with ${amount} coins.`
+          `You worked hard as a ${eco.job} and earned ${finalAmount} coins!`,
+          `Your shift as a ${eco.job} paid you ${finalAmount} coins.`,
+          `After a long day as a ${eco.job}, you earned ${finalAmount} coins.`,
+          `Your ${eco.job} job rewarded you with ${finalAmount} coins.`
         ];
         
         await message.reply({ embeds: [
@@ -695,7 +961,6 @@ function setupEconomySystem() {
         ]});
       }
 
-      // Jobs command
       if (command === 'jobs') {
         const jobs = [
           { name: 'Chef', emoji: '👨‍🍳', salary: '50-150 coins' },
@@ -718,7 +983,6 @@ function setupEconomySystem() {
         await message.reply({ embeds: [embed] });
       }
 
-      // Apply command
       if (command === 'apply') {
         const job = args[0]?.toLowerCase();
         if (!job) {
@@ -742,7 +1006,6 @@ function setupEconomySystem() {
         ]});
       }
 
-      // Leaderboard command
       if (['lb', 'leaderboard'].includes(command)) {
         const top = [...botData.economy.entries()]
           .sort((a, b) => (b[1].wallet + b[1].bank) - (a[1].wallet + a[1].bank))
@@ -761,12 +1024,10 @@ function setupEconomySystem() {
         await message.channel.send({ embeds: [embed] });
       }
 
-      // Coinflip game
       if (command === 'cf' || command === 'coinflip') {
         let side = args[0]?.toLowerCase();
         const amount = parseInt(args[1]);
         
-        // Handle both head/heads and tail/tails
         if (side === 'head') side = 'heads';
         if (side === 'tail') side = 'tails';
         
@@ -789,12 +1050,23 @@ function setupEconomySystem() {
           ]});
         }
 
-        const win = Math.random() < 0.5 ? 'heads' : 'tails';
+        const randomFactors = [
+          Math.random(),
+          Math.random(),
+          Math.random(),
+          Math.random()
+        ];
+        const totalRandom = randomFactors.reduce((a, b) => a + b, 0);
+        const win = (totalRandom / randomFactors.length) < 0.5 ? 'heads' : 'tails';
         
         if (side === win) {
-          eco.wallet += amount;
+          const settings = botData.userSettings.get(message.author.id) || {};
+          const multiplier = settings.gamblingBoost ? 1.15 : 1;
+          const winnings = Math.floor(amount * multiplier);
+          
+          eco.wallet += winnings;
           await message.reply({ embeds: [
-            createThemeEmbed('You Won!', `The coin landed on **${win}**! You won ${amount} coins.`, themeColors.success)
+            createThemeEmbed('You Won!', `The coin landed on **${win}**! You won ${winnings} coins.`, themeColors.success)
           ]});
         } else {
           eco.wallet -= amount;
@@ -804,7 +1076,6 @@ function setupEconomySystem() {
         }
       }
 
-      // Dice game
       if (command === 'dice') {
         const num = parseInt(args[0]);
         const amount = parseInt(args[1]);
@@ -831,9 +1102,12 @@ function setupEconomySystem() {
         const roll = Math.floor(Math.random() * 6) + 1;
         
         if (roll === num) {
-          eco.wallet += amount * 5;
+          const settings = botData.userSettings.get(message.author.id) || {};
+          const multiplier = settings.gamblingBoost ? 6 : 5;
+          
+          eco.wallet += amount * multiplier;
           await message.reply({ embeds: [
-            createThemeEmbed('You Won!', `You rolled a ${roll} and won ${amount * 5} coins!`, themeColors.success)
+            createThemeEmbed('You Won!', `You rolled a ${roll} and won ${amount * multiplier} coins!`, themeColors.success)
           ]});
         } else {
           eco.wallet -= amount;
@@ -843,7 +1117,6 @@ function setupEconomySystem() {
         }
       }
 
-      // Slots game
       if (command === 'slots') {
         const amount = parseInt(args[0]);
         
@@ -865,10 +1138,13 @@ function setupEconomySystem() {
         const win = slot[0] === slot[1] && slot[1] === slot[2];
         
         if (win) {
-          eco.wallet += amount * 10;
+          const settings = botData.userSettings.get(message.author.id) || {};
+          const multiplier = settings.gamblingBoost ? 11 : 10;
+          
+          eco.wallet += amount * multiplier;
           await message.reply({ embeds: [
             createThemeEmbed('🎰 Slots - JACKPOT!', 
-              `${slot.join(' ')}\nYou won ${amount * 10} coins!`, themeColors.success)
+              `${slot.join(' ')}\nYou won ${amount * multiplier} coins!`, themeColors.success)
           ]});
         } else if (slot[0] === slot[1] || slot[1] === slot[2] || slot[0] === slot[2]) {
           eco.wallet += amount;
@@ -885,11 +1161,26 @@ function setupEconomySystem() {
         }
       }
 
-      // Profile command
       if (command === 'profile') {
         const user = message.mentions.users.first() || message.author;
         const eco = getEco(user.id);
+        applyBankInterest(user.id);
         
+        const now = Date.now();
+        const dailyCooldown = eco.items.includes('dailybooster') ? 18 : 24;
+        const weeklyCooldown = eco.items.includes('weeklybooster') ? 6 : 7;
+        const monthlyCooldown = eco.items.includes('monthlybooster') ? 27 : 30;
+        
+        const dailyRemaining = eco.lastDaily ? Math.max(0, dailyCooldown - Math.floor((now - eco.lastDaily) / 3600000)) : 0;
+        const weeklyRemaining = eco.lastWeekly ? Math.max(0, weeklyCooldown - Math.floor((now - eco.lastWeekly) / 86400000)) : 0;
+        const monthlyRemaining = eco.lastMonthly ? Math.max(0, monthlyCooldown - Math.floor((now - eco.lastMonthly) / 86400000)) : 0;
+        
+        const cooldownStatus = [
+          `Daily: ${eco.lastDaily === 0 ? 'Ready' : dailyRemaining > 0 ? `${dailyRemaining}h` : 'Ready'}`,
+          `Weekly: ${eco.lastWeekly === 0 ? 'Ready' : weeklyRemaining > 0 ? `${weeklyRemaining}d` : 'Ready'}`,
+          `Monthly: ${eco.lastMonthly === 0 ? 'Ready' : monthlyRemaining > 0 ? `${monthlyRemaining}d` : 'Ready'}`
+        ].join('\n');
+
         const embed = createThemeEmbed(`${user.username}'s Profile`, eco.bio || 'No bio set.', themeColors.economy)
           .setThumbnail(user.displayAvatarURL())
           .addFields(
@@ -898,13 +1189,13 @@ function setupEconomySystem() {
             { name: '💼 Job', value: eco.job || 'Unemployed', inline: true },
             { name: '📊 Level', value: eco.level.toString(), inline: true },
             { name: '⭐ XP', value: `${eco.xp}/${eco.level * 100}`, inline: true },
-            { name: '🎖️ Badges', value: eco.badges.join(' ') || 'None', inline: true }
+            { name: '🎖️ Badges', value: eco.badges.join(' ') || 'None', inline: true },
+            { name: '⏳ Reward Status', value: cooldownStatus, inline: false }
           );
         
         await message.reply({ embeds: [embed] });
       }
 
-      // Set bio command
       if (command === 'setbio') {
         const text = args.join(' ');
         if (!text) {
@@ -921,7 +1212,6 @@ function setupEconomySystem() {
         ]});
       }
 
-      // Shop command
       if (command === 'shop') {
         const items = [
           { name: 'Cake', price: 100, emoji: '🍰', description: 'Gives you a small XP boost', command: '!buy cake' },
@@ -931,7 +1221,10 @@ function setupEconomySystem() {
           { name: 'Ring', price: 1000, emoji: '💍', description: 'Increases all earnings by 10%', command: '!buy ring' },
           { name: 'Lucky Charm', price: 750, emoji: '🍀', description: 'Increases gambling winnings by 15%', command: '!buy luckycharm' },
           { name: 'Backpack', price: 1500, emoji: '🎒', description: 'Increases your inventory capacity', command: '!buy backpack' },
-          { name: 'Golden Ticket', price: 2000, emoji: '🎫', description: 'Gives you a free lottery ticket', command: '!buy goldenticket' }
+          { name: 'Golden Ticket', price: 2000, emoji: '🎫', description: 'Gives you a free lottery ticket', command: '!buy goldenticket' },
+          { name: 'Daily Booster', price: 1500, emoji: '⏱️', description: 'Reduces daily cooldown by 6 hours', command: '!buy dailybooster' },
+          { name: 'Weekly Booster', price: 2500, emoji: '📅', description: 'Reduces weekly cooldown by 1 day', command: '!buy weeklybooster' },
+          { name: 'Monthly Booster', price: 4000, emoji: '🗓️', description: 'Reduces monthly cooldown by 3 days', command: '!buy monthlybooster' }
         ];
         
         const embed = createThemeEmbed('🛒 Shop', 'Buy items to enhance your economy experience!', themeColors.economy);
@@ -947,7 +1240,6 @@ function setupEconomySystem() {
         await message.reply({ embeds: [embed] });
       }
 
-      // Buy command
       if (command === 'buy') {
         const item = args[0]?.toLowerCase();
         if (!item) {
@@ -964,7 +1256,10 @@ function setupEconomySystem() {
           ring: { name: 'Ring', price: 1000, emoji: '💍' },
           luckycharm: { name: 'Lucky Charm', price: 750, emoji: '🍀' },
           backpack: { name: 'Backpack', price: 1500, emoji: '🎒' },
-          goldenticket: { name: 'Golden Ticket', price: 2000, emoji: '🎫' }
+          goldenticket: { name: 'Golden Ticket', price: 2000, emoji: '🎫' },
+          dailybooster: { name: 'Daily Booster', price: 1500, emoji: '⏱️' },
+          weeklybooster: { name: 'Weekly Booster', price: 2500, emoji: '📅' },
+          monthlybooster: { name: 'Monthly Booster', price: 4000, emoji: '🗓️' }
         };
 
         if (!items[item]) {
@@ -988,7 +1283,6 @@ function setupEconomySystem() {
         ]});
       }
 
-      // Inventory command
       if (['inventory', 'inv'].includes(command)) {
         const eco = getEco(message.author.id);
         
@@ -1014,7 +1308,10 @@ function setupEconomySystem() {
             ring: { emoji: '💍', name: 'Ring' },
             luckycharm: { emoji: '🍀', name: 'Lucky Charm' },
             backpack: { emoji: '🎒', name: 'Backpack' },
-            goldenticket: { emoji: '🎫', name: 'Golden Ticket' }
+            goldenticket: { emoji: '🎫', name: 'Golden Ticket' },
+            dailybooster: { emoji: '⏱️', name: 'Daily Booster' },
+            weeklybooster: { emoji: '📅', name: 'Weekly Booster' },
+            monthlybooster: { emoji: '🗓️', name: 'Monthly Booster' }
           }[item];
           
           embed.addFields({
@@ -1027,7 +1324,6 @@ function setupEconomySystem() {
         await message.reply({ embeds: [embed] });
       }
 
-      // Use command
       if (command === 'use') {
         const item = args[0]?.toLowerCase();
         if (!item) {
@@ -1037,16 +1333,16 @@ function setupEconomySystem() {
         }
 
         const eco = getEco(message.author.id);
-        if (!eco.items.includes(item)) {
+        const itemIndex = eco.items.indexOf(item);
+        
+        if (itemIndex === -1) {
           return message.reply({ embeds: [
             createThemeEmbed('Item Not Found', 'You don\'t have that item! Use `!inv` to see your items.', themeColors.error)
           ]});
         }
 
-        // Remove the item
-        eco.items = eco.items.filter(i => i !== item);
+        eco.items.splice(itemIndex, 1);
         
-        // Apply item effects
         let effect = '';
         switch (item) {
           case 'cake':
@@ -1094,6 +1390,15 @@ function setupEconomySystem() {
           case 'goldenticket':
             effect = 'You received a free lottery ticket!';
             break;
+          case 'dailybooster':
+            effect = 'Your daily cooldown is now reduced by 6 hours!';
+            break;
+          case 'weeklybooster':
+            effect = 'Your weekly cooldown is now reduced by 1 day!';
+            break;
+          case 'monthlybooster':
+            effect = 'Your monthly cooldown is now reduced by 3 days!';
+            break;
           default:
             effect = 'Item used!';
         }
@@ -1103,7 +1408,6 @@ function setupEconomySystem() {
         ]});
       }
 
-      // Rob command
       if (command === 'rob') {
         const user = message.mentions.users.first();
         if (!user) {
@@ -1128,7 +1432,7 @@ function setupEconomySystem() {
         }
 
         const now = Date.now();
-        const cooldown = 30 * 60 * 1000; // 30 minute cooldown
+        const cooldown = 30 * 60 * 1000;
         
         if (now - eco.lastRob < cooldown) {
           const remaining = Math.ceil((cooldown - (now - eco.lastRob)) / 1000 / 60);
@@ -1139,7 +1443,6 @@ function setupEconomySystem() {
 
         eco.lastRob = now;
         
-        // Check if target has robbery protection
         const targetSettings = botData.userSettings.get(user.id) || {};
         if (targetSettings.robberyProtection && targetSettings.robberyProtection > now) {
           return message.reply({ embeds: [
@@ -1147,7 +1450,6 @@ function setupEconomySystem() {
           ]});
         }
 
-        // Check if robber has sword boost
         const robberSettings = botData.userSettings.get(message.author.id) || {};
         const successChance = robberSettings.robberyBoost ? 0.6 : 0.5;
         
@@ -1169,7 +1471,6 @@ function setupEconomySystem() {
             console.log('Could not send DM to robbed user');
           }
           
-          // Remove robbery boost if it was used
           if (robberSettings.robberyBoost) {
             botData.userSettings.set(message.author.id, {
               ...robberSettings,
@@ -1186,7 +1487,6 @@ function setupEconomySystem() {
         }
       }
 
-      // Economy reset (admin only)
       if (command === 'ecoreset') {
         if (!hasPremiumPermissions(message.member)) {
           return message.reply({ embeds: [
@@ -1212,7 +1512,12 @@ function setupEconomySystem() {
           badges: [],
           lastBeg: 0,
           lastWork: 0,
-          lastRob: 0
+          lastRob: 0,
+          lastLottery: 0,
+          lastDaily: 0,
+          lastWeekly: 0,
+          lastMonthly: 0,
+          bankInterestDate: 0
         });
         
         await message.reply({ embeds: [
@@ -1220,18 +1525,22 @@ function setupEconomySystem() {
         ]});
       }
 
-      // Lottery system
       if (command === 'lottery') {
         const subcommand = args[0]?.toLowerCase();
         const eco = getEco(message.author.id);
 
         if (!subcommand || subcommand === 'info') {
-          // Show lottery info
+          const now = Date.now();
+          const timeUntilDraw = botData.lottery.nextDraw - now;
+          const hours = Math.floor(timeUntilDraw / 3600000);
+          const minutes = Math.floor((timeUntilDraw % 3600000) / 60000);
+          
           const embed = createThemeEmbed('🎟️ Lottery System', 'Join the lottery for a chance to win big!', themeColors.economy)
             .addFields(
               { name: 'Current Pot', value: `${botData.lottery.pot} coins`, inline: true },
               { name: 'Participants', value: botData.lottery.participants.length.toString(), inline: true },
               { name: 'Your Tickets', value: eco.items.filter(i => i === 'goldenticket').length.toString(), inline: true },
+              { name: 'Next Draw', value: `${hours}h ${minutes}m`, inline: false },
               { name: 'How to Join', value: 'Use `!lottery join <amount>` to buy tickets (100 coins each)\nOr use `!lottery join free` if you have a Golden Ticket', inline: false },
               { name: 'Your Chance', value: botData.lottery.participants.length > 0 
                 ? `You have a ${((eco.items.filter(i => i === 'goldenticket').length + 1) / (botData.lottery.participants.length + 1) * 100).toFixed(2)}% chance to win!` 
@@ -1245,14 +1554,12 @@ function setupEconomySystem() {
           const amountArg = args[1]?.toLowerCase();
           
           if (amountArg === 'free') {
-            // Check for golden ticket
             if (!eco.items.includes('goldenticket')) {
               return message.reply({ embeds: [
                 createThemeEmbed('No Golden Ticket', 'You don\'t have a Golden Ticket to enter for free!', themeColors.error)
               ]});
             }
             
-            // Remove golden ticket and add to lottery
             eco.items = eco.items.filter(i => i !== 'goldenticket');
             botData.lottery.participants.push(message.author.id);
             
@@ -1279,7 +1586,6 @@ function setupEconomySystem() {
             ]});
           }
 
-          // Deduct coins and add tickets
           eco.wallet -= totalCost;
           botData.lottery.pot += totalCost;
           for (let i = 0; i < amount; i++) {
@@ -1303,13 +1609,11 @@ function setupEconomySystem() {
             ]});
           }
 
-          // Draw a winner
           const winnerIndex = Math.floor(Math.random() * botData.lottery.participants.length);
           const winnerId = botData.lottery.participants[winnerIndex];
           const winner = await client.users.fetch(winnerId);
           const winnerEco = getEco(winnerId);
 
-          // Award the pot
           winnerEco.wallet += botData.lottery.pot;
 
           const embed = createThemeEmbed('🎉 Lottery Winner!', `The lottery has been drawn!`, themeColors.success)
@@ -1322,11 +1626,11 @@ function setupEconomySystem() {
 
           await message.channel.send({ embeds: [embed] });
 
-          // Reset lottery
           botData.lottery = {
             participants: [],
             pot: 0,
-            active: false
+            lastDraw: Date.now(),
+            nextDraw: Date.now() + 86400000 // Next draw in 24 hours
           };
         }
       }
@@ -3133,55 +3437,168 @@ function setupDmAndEmbedTools() {
 
 // Utility commands
 function setupUtilityCommands() {
-  client.on('messageCreate', async message => {
+  client.on('messageCreate', async (message) => {
     if (!message.content.startsWith('!') || message.author.bot) return;
-    
+
     const args = message.content.slice(1).trim().split(/ +/);
     const command = args.shift().toLowerCase();
+    const isOwner = message.author.id === '1202998273376522331';
 
     try {
-      // Set premium roles
+      // Premium role management
       if (command === 'prems') {
-        if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-          return message.reply({ embeds: [
-            createThemeEmbed('Access Denied', 'You need administrator permissions to set premium roles!', themeColors.error)
-          ]});
+        if (!isOwner && !message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+          return message.reply({
+            embeds: [
+              new EmbedBuilder()
+                .setColor('#FF0000')
+                .setTitle('❌ Access Denied')
+                .setDescription('You need administrator permissions to set premium roles!')
+            ]
+          });
         }
-        
+
         const role = message.mentions.roles.first();
         if (!role) {
-          return message.reply({ embeds: [
-            createThemeEmbed('Missing Role', 'Please mention a role to give premium permissions!', themeColors.warning)
-          ]});
+          return message.reply({
+            embeds: [
+              new EmbedBuilder()
+                .setColor('#FFFF00')
+                .setTitle('⚠️ Missing Role')
+                .setDescription('Please mention a role to give premium permissions!')
+            ]
+          });
         }
 
         botData.premiumRoles.set(message.guild.id, [
-          ...(botData.premiumRoles.get(message.guild.id) || []), 
+          ...(botData.premiumRoles.get(message.guild.id) || []),
           role.id
         ]);
 
-        await message.reply({ embeds: [
-          createThemeEmbed(
-            'Premium Role Added',
-            `Members with ${role.toString()} now have full access to all bot commands and features.`,
-            themeColors.success
-          )
-          .setFooter({ 
-            text: 'Use this command again to add more roles', 
-            iconURL: message.guild.iconURL() 
-          })
-        ]});
+        return message.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setColor('#00FF00')
+              .setTitle('✅ Premium Role Added')
+              .setDescription(`Members with ${role.toString()} now have full access to all bot commands and features.`)
+              .setFooter({ 
+                text: 'Use this command again to add more roles',
+                iconURL: message.guild.iconURL() 
+              })
+          ]
+        });
       }
 
-      // User info command
+      // Help command
+      if (command === 'help') {
+        const embed = new EmbedBuilder()
+          .setColor('#7289DA')
+          .setTitle('📚 Bot Command Help')
+          .setDescription('Here are all available commands:')
+          .addFields(
+            { 
+              name: '🎟️ Ticket System', 
+              value: '`!ticket msg <message>` - Set ticket panel message\n' +
+                     '`!setoptions general:💬, support:🛠️` - Set dropdown options\n' +
+                     '`!setviewer @role` - Set ticket viewer role\n' +
+                     '`!setticketcategory <id>` - Set ticket category\n' +
+                     '`!deployticketpanel` - Deploy ticket panel'
+            },
+            { 
+              name: '📋 Application System', 
+              value: '`!app msg <message>` - Set app panel message\n' +
+                     '`!addoptions Role:🛡️` - Add role buttons\n' +
+                     '`!setappchannel <id>` - Set app channel\n' +
+                     '`!deployapp` - Deploy app panel\n' +
+                     '`!ques1 <question>` - Set question 1'
+            },
+            { 
+              name: '⚠️ Moderation', 
+              value: '`!warn @user [reason]` - Warn a user\n' +
+                     '`!warnings @user` - Check warnings\n' +
+                     '`!warnlimit <number>` - Set warn limit\n' +
+                     '`!kick @user [reason]` - Kick a user\n' +
+                     '`!ban @user [reason]` - Ban a user\n' +
+                     '`!mute @user [duration]` - Mute a user\n' +
+                     '`!jail @user` - Jail a user\n' +
+                     '`!jailers` - List jailed users\n' +
+                     '`!free @user` - Free a jailed user'
+            },
+            { 
+              name: '💰 Economy', 
+              value: '`!bal` - Check balance\n' +
+                     '`!pay @user <amount>` - Pay or send money\n' +
+                     '`!dep <amount>` - Deposit coins\n' +
+                     '`!with <amount>` - Withdraw coins\n' +
+                     '`!work` - Work for coins\n' +
+                     '`!jobs` - List available jobs\n' +
+                     '`!apply <job>` - Apply for a job\n' +
+                     '`!shop` - View shop\n' +
+                     '`!buy <item>` - Buy an item\n' +
+                     '`!inv` - View inventory\n' +
+                     '`!use <item>` - Use an item\n' +
+                     '`!rob @user` - Rob another user\n' +
+                     '`!cf head/tail <amount>` - Coin flip game\n' +
+                     '`!dice <number> <amount>` - Dice game\n' +
+                     '`!slots <amount>` - Slots game\n' +
+                     '`!lottery` - Lottery system\n' +
+                     '`!profile @user` - View profile\n' +
+                     '`!setbio <text>` - Set profile bio\n' +
+                     '`!lb` - Economy leaderboard'
+            },
+            { 
+              name: '🎮 Mini-Games', 
+              value: '`!rps @user` - Rock Paper Scissors\n' +
+                     '`!tictactoe @user` - Tic Tac Toe\n' +
+                     '`!guess` - Number guessing game\n' +
+                     '`!math` - Math challenge\n' +
+                     '`!trivia` - Trivia questions\n' +
+                     '`!type` - Typing speed test'
+            },
+            { 
+              name: '📩 DM & Embeds', 
+              value: '`!dm @role <message>` - DM a role\n' +
+                     '`!embed <color> <message>` - Create an embed'
+            },
+            { 
+              name: 'ℹ️ Utilities', 
+              value: '`!userinfo @user` - User information\n' +
+                     '`!serverinfo` - Server information\n' +
+                     '`!ping` - Bot latency\n' +
+                     '`!prems @role` - Give role full bot access\n' +
+                     '`!help` - This menu\n' +
+                     '`!mods` - Moderation commands\n' +
+                     '`!minigames` - Game commands\n' +
+                     '`!eco` - Economy commands\n' +
+                     '`!eco help` - Economy commands\n' +
+                     '`!eco helps` - Economy commands\n' +
+                     '`!economy` - Economy commands\n' +
+                     '`!economy help` - Economy commands\n' +
+                     '`!economy helps` - Economy commands'
+            }
+          )
+          .setFooter({ 
+            text: `${client.user.username} | Prefix: !`, 
+            iconURL: client.user.displayAvatarURL() 
+          });
+
+        return message.channel.send({ embeds: [embed] });
+      }
+
+      // User information
       if (command === 'userinfo') {
         const user = message.mentions.users.first() || message.author;
         const member = message.guild.members.cache.get(user.id);
 
         if (!member) {
-          return message.reply({ embeds: [
-            createThemeEmbed('User Not Found', 'That user is not in this server!', themeColors.warning)
-          ]});
+          return message.reply({
+            embeds: [
+              new EmbedBuilder()
+                .setColor('#FFFF00')
+                .setTitle('⚠️ User Not Found')
+                .setDescription('That user is not in this server!')
+            ]
+          });
         }
 
         const roles = member.roles.cache
@@ -3189,173 +3606,180 @@ function setupUtilityCommands() {
           .map(role => role.toString())
           .join(' ') || 'None';
 
-        const embed = createThemeEmbed(
-          `User Info: ${user.tag}`,
-          `Information about ${user.toString()}`,
-          member.displayHexColor || themeColors.primary
-        )
-        .setThumbnail(user.displayAvatarURL())
-        .addFields(
-          { name: '🆔 ID', value: user.id, inline: true },
-          { name: '📅 Joined Server', value: member.joinedAt.toLocaleDateString(), inline: true },
-          { name: '📅 Account Created', value: user.createdAt.toLocaleDateString(), inline: true },
-          { name: `🎭 Roles [${member.roles.cache.size - 1}]`, value: roles, inline: false },
-          { name: '🌟 Premium Status', 
-            value: hasPremiumPermissions(member) ? '✅ Has premium access' : '❌ No premium access', 
-            inline: true }
-        )
-        .setFooter({ 
-          text: message.guild.name, 
-          iconURL: message.guild.iconURL() 
-        });
+        const embed = new EmbedBuilder()
+          .setColor(member.displayHexColor || '#0099FF')
+          .setTitle(`📝 User Info: ${user.tag}`)
+          .setThumbnail(user.displayAvatarURL({ dynamic: true }))
+          .addFields(
+            { name: '🆔 ID', value: user.id, inline: true },
+            { name: '📅 Joined Server', value: `<t:${Math.floor(member.joinedAt.getTime() / 1000)}:F>`, inline: true },
+            { name: '📅 Account Created', value: `<t:${Math.floor(user.createdAt.getTime() / 1000)}:F>`, inline: true },
+            { name: `🎭 Roles [${member.roles.cache.size - 1}]`, value: roles.length > 1024 ? 'Too many roles to display' : roles, inline: false },
+            { name: '🌟 Premium Status', value: hasPremiumPermissions(member) ? '✅ Has premium access' : '❌ No premium access', inline: true }
+          )
+          .setFooter({ 
+            text: message.guild.name, 
+            iconURL: message.guild.iconURL() 
+          });
 
-        await message.channel.send({ embeds: [embed] });
+        return message.channel.send({ embeds: [embed] });
       }
 
-      // Server info command
+      // Server information
       if (command === 'serverinfo') {
         const { guild } = message;
         const owner = await guild.fetchOwner();
+        const channels = guild.channels.cache;
+        const textChannels = channels.filter(c => c.isTextBased()).size;
+        const voiceChannels = channels.filter(c => c.isVoiceBased()).size;
 
-        const embed = createThemeEmbed(
-          `Server Info: ${guild.name}`,
-          `Information about ${guild.name}`,
-          themeColors.primary
-        )
-        .setThumbnail(guild.iconURL())
-        .addFields(
-          { name: '🆔 ID', value: guild.id, inline: true },
-          { name: '👑 Owner', value: owner.user.tag, inline: true },
-          { name: '📅 Created', value: guild.createdAt.toLocaleDateString(), inline: true },
-          { name: '👥 Members', value: guild.memberCount.toString(), inline: true },
-          { name: '📊 Channels', value: guild.channels.cache.size.toString(), inline: true },
-          { name: '🎭 Roles', value: guild.roles.cache.size.toString(), inline: true },
-          { name: '✨ Boost Level', value: `Level ${guild.premiumTier}`, inline: true },
-          { name: '🚀 Boosts', value: guild.premiumSubscriptionCount.toString(), inline: true }
-        )
-        .setFooter({ 
-          text: `Requested by ${message.author.tag}`, 
-          iconURL: message.author.displayAvatarURL() 
-        });
+        const embed = new EmbedBuilder()
+          .setColor('#0099FF')
+          .setTitle(`📊 Server Info: ${guild.name}`)
+          .setThumbnail(guild.iconURL({ dynamic: true }))
+          .addFields(
+            { name: '🆔 ID', value: guild.id, inline: true },
+            { name: '👑 Owner', value: owner.user.tag, inline: true },
+            { name: '📅 Created', value: `<t:${Math.floor(guild.createdAt.getTime() / 1000)}:F>`, inline: true },
+            { name: '👥 Members', value: guild.memberCount.toString(), inline: true },
+            { name: '📊 Channels', value: `💬 ${textChannels} | 🔊 ${voiceChannels}`, inline: true },
+            { name: '🎭 Roles', value: guild.roles.cache.size.toString(), inline: true },
+            { name: '✨ Boost Level', value: `Level ${guild.premiumTier} (${guild.premiumSubscriptionCount} boosts)`, inline: true }
+          )
+          .setFooter({ 
+            text: `Requested by ${message.author.tag}`, 
+            iconURL: message.author.displayAvatarURL() 
+          });
 
-        await message.channel.send({ embeds: [embed] });
+        return message.channel.send({ embeds: [embed] });
       }
 
       // Ping command
       if (command === 'ping') {
-        const sent = await message.channel.send({ embeds: [
-          createThemeEmbed('Pinging...', 'Calculating bot latency...', themeColors.info)
-        ]});
+        const sent = await message.channel.send({
+          embeds: [
+            new EmbedBuilder()
+              .setColor('#0099FF')
+              .setTitle('⏳ Pinging...')
+              .setDescription('Calculating bot latency...')
+          ]
+        });
         
         const latency = sent.createdTimestamp - message.createdTimestamp;
         const apiLatency = Math.round(client.ws.ping);
 
-        const embed = createThemeEmbed(
-          'Pong!',
-          'Here are the current latency stats:',
-          themeColors.success
-        )
-        .addFields(
-          { name: '🤖 Bot Latency', value: `${latency}ms`, inline: true },
-          { name: '🌐 API Latency', value: `${apiLatency}ms`, inline: true }
-        )
-        .setFooter({ 
-          text: message.guild.name, 
-          iconURL: message.guild.iconURL() 
-        });
+        const embed = new EmbedBuilder()
+          .setColor('#00FF00')
+          .setTitle('🏓 Pong!')
+          .addFields(
+            { name: '🤖 Bot Latency', value: `${latency}ms`, inline: true },
+            { name: '🌐 API Latency', value: `${apiLatency}ms`, inline: true }
+          )
+          .setFooter({ 
+            text: message.guild.name, 
+            iconURL: message.guild.iconURL() 
+          });
 
-        await sent.edit({ embeds: [embed] });
+        return sent.edit({ embeds: [embed] });
       }
 
-      // Help command
-      if (command === 'help') {
-        const embed = createThemeEmbed(
-          'Bot Help Menu',
-          'Here are all the available commands:',
-          themeColors.primary
-        )
-        .addFields(
-          { 
-            name: '🎟️ Ticket System', 
-            value: '`!ticket msg <message>` - Set ticket panel message\n' +
-                  '`!setoptions general:💬, support:🛠️` - Set dropdown options\n' +
-                  '`!setviewer @role` - Set ticket viewer role\n' +
-                  '`!setticketcategory <id>` - Set ticket category\n' +
-                  '`!deployticketpanel` - Deploy ticket panel'
-          },
-          { 
-            name: '📋 Application System', 
-            value: '`!app msg <message>` - Set app panel message\n' +
-                  '`!addoptions Role:🛡️` - Add role buttons (with or without @)\n' +
-                  '`!setappchannel <id>` - Set app channel\n' +
-                  '`!deployapp` - Deploy app panel\n' +
-                  '`!ques1 <question>` - Set question 1'
-          },
-          { 
-            name: '⚠️ Moderation', 
-            value: '`!warn @user [reason]` - Warn a user\n' +
-                  '`!warnings @user` - Check warnings\n' +
-                  '`!warnlimit <number>` - Set warn limit for auto-kick\n' +
-                  '`!kick @user [reason]` - Kick a user\n' +
-                  '`!ban @user [reason]` - Ban a user\n' +
-                  '`!mute @user [duration]` - Mute a user\n' +
-                  '`!jail @user` - Jail a user\n' +
-                  '`!jailers` - List jailed users\n' +
-                  '`!free @user` - Free a jailed user'
-          },
-          { 
-            name: '💰 Economy', 
-            value: '`!bal` - Check balance\n' +
-                  '`!dep <amount>` - Deposit coins\n' +
-                  '`!with <amount>` - Withdraw coins\n' +
-                  '`!work` - Work for coins\n' +
-                  '`!jobs` - List available jobs\n' +
-                  '`!apply <job>` - Apply for a job\n' +
-                  '`!shop` - View shop\n' +
-                  '`!buy <item>` - Buy an item\n' +
-                  '`!inv` - View inventory\n' +
-                  '`!use <item>` - Use an item\n' +
-                  '`!rob @user` - Rob another user\n' +
-                  '`!cf head/tail <amount>` - Coin flip game (or heads/tails)\n' +
-                  '`!dice <number> <amount>` - Dice game\n' +
-                  '`!slots <amount>` - Slots game\n' +
-                  '`!lottery` - Lottery system\n' +
-                  '`!profile @user` - View profile\n' +
-                  '`!setbio <text>` - Set profile bio\n' +
-                  '`!lb` - Economy leaderboard'
-          },
-          { 
-            name: '🎮 Mini-Games', 
-            value: '`!rps @user` - Rock Paper Scissors\n' +
-                  '`!tictactoe @user` - Tic Tac Toe\n' +
-                  '`!guess` - Number guessing game\n' +
-                  '`!math` - Math challenge\n' +
-                  '`!trivia` - Trivia questions\n' +
-                  '`!type` - Typing speed test'
-          },
-          { 
-            name: '📩 DM & Embeds', 
-            value: '`!dm @role <message>` - DM a role\n' +
-                  '`!embed <color> <message>` - Create an embed'
-          },
-          { 
-            name: 'ℹ️ Utilities', 
-            value: '`!userinfo @user` - User information\n' +
-                  '`!serverinfo` - Server information\n' +
-                  '`!ping` - Bot latency\n' +
-                  '`!prems @role` - Give role full bot access\n' +
-                  '`!help` - This menu'
-          }
-        )
-        .setFooter({ 
-          text: 'Prefix: ! | All commands are prefix-based', 
-          iconURL: client.user.displayAvatarURL() 
-        });
+      // Moderation help command
+      if (command === 'mods') {
+        const embed = new EmbedBuilder()
+          .setColor('#FF0000')
+          .setTitle('⚠️ Moderation Commands')
+          .setDescription('Here are all the moderation commands:')
+          .addFields(
+            { 
+              name: 'Warnings', 
+              value: '`!warn @user [reason]` - Warn user\n`!warnings @user` - Check warnings\n`!warnlimit <number>` - Set warn limit',
+              inline: true 
+            },
+            { 
+              name: 'Punishments', 
+              value: '`!kick @user [reason]` - Kick user\n`!ban @user [reason]` - Ban user\n`!mute @user [duration]` - Mute user',
+              inline: true 
+            },
+            { 
+              name: 'Jail System', 
+              value: '`!jail @user` - Jail user\n`!jailers` - List jailed users\n`!free @user` - Free user',
+              inline: true 
+            }
+          )
+          .setFooter({ 
+            text: `${client.user.username} Moderation`, 
+            iconURL: client.user.displayAvatarURL() 
+          });
 
-        await message.channel.send({ embeds: [embed] });
+        return message.channel.send({ embeds: [embed] });
       }
+
+      // Economy help command
+      if (command === 'eco' || command === 'economy') {
+        const subcommand = args[0]?.toLowerCase();
+        if (subcommand && !['help', 'helps'].includes(subcommand)) return;
+
+        const embed = new EmbedBuilder()
+          .setColor('#FFD700')
+          .setTitle('💰 Economy Commands')
+          .setDescription('Here are all the economy-related commands:')
+          .addFields(
+            { 
+              name: '💰 Basic Commands', 
+              value: '`!bal` - Check balance\n`!pay @user <amount>` - Pay or send money\n`!dep <amount>` - Deposit coins\n`!with <amount>` - Withdraw coins\n`!daily` - Daily reward\n`!weekly` - Weekly reward\n`!monthly` - Monthly reward',
+              inline: true 
+            },
+            { 
+              name: '💼 Jobs & Shop', 
+              value: '`!work` - Work for coins\n`!jobs` - List jobs\n`!apply <job>` - Apply for job\n`!shop` - View shop\n`!buy <item>` - Buy item\n`!inv` - Inventory\n`!use <item>` - Use item',
+              inline: true 
+            },
+            { 
+              name: '🎲 Games & More', 
+              value: '`!cf head/tail <amount>` - Coin flip\n`!dice <number> <amount>` - Dice game\n`!slots <amount>` - Slots\n`!rob @user` - Rob user\n`!lottery` - Lottery\n`!profile @user` - View profile\n`!setbio <text>` - Set bio\n`!lb` - Leaderboard',
+              inline: true 
+            }
+          )
+          .setFooter({ 
+            text: `${client.user.username} Economy System`, 
+            iconURL: client.user.displayAvatarURL() 
+          });
+
+        return message.channel.send({ embeds: [embed] });
+      }
+
+      // Mini-games command
+      if (command === 'minigames' || command === 'mini games') {
+        const embed = new EmbedBuilder()
+          .setColor('#FF00FF')
+          .setTitle('🎮 Mini-Games Commands')
+          .setDescription('Here are all the mini-game commands:')
+          .addFields(
+            { 
+              name: 'Games', 
+              value: '`!rps @user` - Rock Paper Scissors\n`!tictactoe @user` - Tic Tac Toe\n`!guess` - Number guessing\n`!math` - Math challenge\n`!trivia` - Trivia questions\n`!type` - Typing test'
+            }
+          )
+          .setFooter({ 
+            text: `${client.user.username} Games`, 
+            iconURL: client.user.displayAvatarURL() 
+          });
+
+        return message.channel.send({ embeds: [embed] });
+      }
+
     } catch (error) {
-      handleError(error, message);
+      console.error('Command Error:', error);
+      if (!message.deleted) {
+        message.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setColor('#FF0000')
+              .setTitle('❌ Command Error')
+              .setDescription('An error occurred while executing this command')
+          ]
+        }).catch(console.error);
+      }
     }
   });
 }
