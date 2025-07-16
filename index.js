@@ -4,7 +4,7 @@ const http = require('http');
 const { UserEconomy, Warning, GuildSettings, JailedUser, Lottery, ActiveGame, 
   getGuildSettings, getUserEconomy, getWarnings, addWarning, 
   getJailedUsers, jailUser, freeUser, getLottery, 
-  getActiveGame, createActiveGame, deleteActiveGame } = require('../database');
+  getActiveGame, createActiveGame, deleteActiveGame } = require('./database');
   const express = require('express');
 
 // Initialize client with all required intents
