@@ -1,13 +1,11 @@
-require('dotenv').config({ quiet: true }); 
+require('dotenv').config(); 
 const { Client, IntentsBitField, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, PermissionFlagsBits, StringSelectMenuBuilder, Collection, Events } = require('discord.js');
 const http = require('http');
 const { UserEconomy, Warning, GuildSettings, JailedUser, Lottery, ActiveGame, 
   getGuildSettings, getUserEconomy, getWarnings, addWarning, 
   getJailedUsers, jailUser, freeUser, getLottery, 
-  getActiveGame, createActiveGame, deleteActiveGame } = require('./database');
+  getActiveGame, createActiveGame, deleteActiveGame } = require('../database');
   const express = require('express');
-const mongoose = require('mongoose');
-const app = express();
 
 // Initialize client with all required intents
 const client = new Client({
